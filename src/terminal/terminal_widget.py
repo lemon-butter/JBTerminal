@@ -942,8 +942,12 @@ class TerminalWidget(QWidget):
         # Clear selection on any key press
         self._clear_selection()
 
-        # Ctrl+key combos (send control character)
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
+        # Ctrl(^)+key combos → send control character
+        # On macOS: MetaModifier = physical Ctrl key, ControlModifier = Cmd key
+        import sys
+        _ctrl = (Qt.KeyboardModifier.MetaModifier if sys.platform == "darwin"
+                 else Qt.KeyboardModifier.ControlModifier)
+        if modifiers & _ctrl:
             if Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
                 ctrl_char = bytes([key - Qt.Key.Key_A + 1])
                 self.input_ready.emit(ctrl_char)
@@ -958,7 +962,12 @@ class TerminalWidget(QWidget):
                 self.input_ready.emit(b"\x1d")
                 return
 
-        # Special keys
+        # Shift+Enter / Shift+Return -> newline (some shells use this)
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.input_ready.emit(b"\r")
+            return
+
+        # Special keys (with optional Shift modifier for terminal apps)
         if key in _QT_KEY_TO_VT100:
             seq = _QT_KEY_TO_VT100[key]
             # Application cursor mode
@@ -966,6 +975,20 @@ class TerminalWidget(QWidget):
                 _decappkey = getattr(pyte.modes, "DECAPPKEY", None)
                 if _decappkey is not None and _decappkey in self._screen.mode:
                     seq = seq.replace(b"[", b"O")
+            # Shift+arrow/home/end: some terminals send modified sequences
+            if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                if key == Qt.Key.Key_Up:
+                    seq = b"\x1b[1;2A"
+                elif key == Qt.Key.Key_Down:
+                    seq = b"\x1b[1;2B"
+                elif key == Qt.Key.Key_Right:
+                    seq = b"\x1b[1;2C"
+                elif key == Qt.Key.Key_Left:
+                    seq = b"\x1b[1;2D"
+                elif key == Qt.Key.Key_Home:
+                    seq = b"\x1b[1;2H"
+                elif key == Qt.Key.Key_End:
+                    seq = b"\x1b[1;2F"
             self.input_ready.emit(seq)
             return
 
