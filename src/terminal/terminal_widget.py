@@ -26,6 +26,7 @@ from PyQt6.QtGui import (
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QPen,
     QResizeEvent,
     QWheelEvent,
     QInputMethodEvent,
