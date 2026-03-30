@@ -789,9 +789,7 @@ class TerminalWidget(QWidget):
                         painter.font().setItalic(True)
                     painter.setPen(fg_color)
                     painter.drawText(x1 + 1, int(y + baseline), data)
-                    painter.setFont(self._font)  # always restore
-                    if need_restore:
-                        painter.setFont(self._font)
+                    painter.setFont(self._font)
 
                 # Underline
                 if hasattr(char, 'underscore') and char.underscore:
