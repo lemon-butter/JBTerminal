@@ -437,8 +437,11 @@ class TerminalWidget(QWidget):
 
     def _recalc_metrics(self) -> None:
         fm = QFontMetricsF(self._font)
-        self._cell_width = fm.horizontalAdvance("M")
-        self._cell_height = fm.height() * self._config.line_spacing
+        raw_width = fm.horizontalAdvance("M")
+        raw_height = fm.height() * self._config.line_spacing
+        # Guard against zero/negative metrics (can happen with missing fonts)
+        self._cell_width = max(raw_width, 1.0)
+        self._cell_height = max(raw_height, 1.0)
         self._baseline_offset = fm.ascent()
 
         # Recalculate grid size
@@ -661,7 +664,6 @@ class TerminalWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
         bg = QColor(COLORS["bg_terminal"])
-        painter.fillRect(self.rect(), bg)
         painter.setFont(self._font)
 
         cw = self._cell_width
@@ -680,7 +682,15 @@ class TerminalWidget(QWidget):
         screen = self._screen
         sb_len = len(self._scrollback)
 
-        for row_idx in range(self._rows):
+        # Only repaint rows that intersect the dirty region
+        dirty_rect = event.rect()
+        first_dirty_row = max(0, int(dirty_rect.top() / ch))
+        last_dirty_row = min(self._rows - 1, int(dirty_rect.bottom() / ch))
+
+        # Fill only the dirty region background
+        painter.fillRect(dirty_rect, bg)
+
+        for row_idx in range(first_dirty_row, last_dirty_row + 1):
             # Determine which buffer row to draw and its global index
             if self._scroll_offset > 0:
                 sb_row = sb_len - self._scroll_offset + row_idx

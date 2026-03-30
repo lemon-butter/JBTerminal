@@ -60,10 +60,20 @@ class PtyReaderThread(QThread):
             self.process_exited.emit(self._pane_id, exit_code)
 
     def _reap(self) -> int:
-        """Wait for child process and return exit code."""
+        """Wait for child process and return exit code.
+
+        Tries WNOHANG first; if that returns (0, 0) — meaning the child is
+        still alive — do a blocking waitpid with a short timeout to avoid
+        leaving zombie processes.
+        """
         try:
-            _, status = os.waitpid(self._pid, os.WNOHANG)
-            if os.WIFEXITED(status):
+            pid_result, status = os.waitpid(self._pid, os.WNOHANG)
+            if pid_result == 0:
+                # Child still running; give it a moment then try blocking
+                import time
+                time.sleep(0.1)
+                pid_result, status = os.waitpid(self._pid, os.WNOHANG)
+            if pid_result != 0 and os.WIFEXITED(status):
                 return os.WEXITSTATUS(status)
             return -1
         except ChildProcessError:
@@ -254,13 +264,18 @@ class PtyManager(QObject):
         except OSError:
             pass
 
-        # Reap zombie
-        try:
-            os.waitpid(proc.pid, os.WNOHANG)
-        except ChildProcessError:
-            pass
-        except OSError:
-            pass
+        # Reap zombie — retry briefly if child is not yet exited
+        for _ in range(3):
+            try:
+                pid_result, _ = os.waitpid(proc.pid, os.WNOHANG)
+                if pid_result != 0:
+                    break
+                import time
+                time.sleep(0.05)
+            except ChildProcessError:
+                break
+            except OSError:
+                break
 
     def _on_data_ready(self, pane_id: str, data: bytes) -> None:
         """Forward data from reader thread to pty_output signal."""

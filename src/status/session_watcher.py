@@ -195,8 +195,26 @@ class SessionWatcher(QObject):
 
     @staticmethod
     def _read_tail(path: str, n: int) -> List[str]:
-        """Read last *n* lines of a file efficiently."""
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            # For moderate-sized files, just read all and take tail
-            all_lines = fh.readlines()
-        return all_lines[-n:] if len(all_lines) > n else all_lines
+        """Read last *n* lines of a file efficiently.
+
+        For large files, seeks backwards from the end to avoid reading
+        the entire file into memory.
+        """
+        file_size = os.path.getsize(path)  # raises OSError if missing
+
+        # For small files (< 256 KB), just read the whole thing
+        if file_size < 256 * 1024:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                all_lines = fh.readlines()
+            return all_lines[-n:] if len(all_lines) > n else all_lines
+
+        # For larger files, read from the end in chunks
+        chunk_size = min(file_size, max(8192, n * 512))
+        with open(path, "rb") as fh:
+            fh.seek(max(0, file_size - chunk_size))
+            data = fh.read()
+        lines = data.decode("utf-8", errors="replace").splitlines(keepends=True)
+        # Drop the first (potentially partial) line
+        if lines and file_size > chunk_size:
+            lines = lines[1:]
+        return lines[-n:] if len(lines) > n else lines

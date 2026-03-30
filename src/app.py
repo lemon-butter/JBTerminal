@@ -31,4 +31,11 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     # Store on app so other code can access it
     app.setProperty("theme_manager", theme_manager)  # type: ignore[arg-type]
 
+    # --- App icon ---
+    try:
+        from src.resources.icon import create_app_icon
+        app.setWindowIcon(create_app_icon())
+    except Exception:
+        pass  # icon is optional, don't block startup
+
     return app

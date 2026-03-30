@@ -532,7 +532,18 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         """Save layout and clean up all resources on window close."""
         self._save_layout()
-        self._pty_manager.kill_all()
+
+        # Stop all monitors and watchers first
         self._usage_monitor.stop()
         self._session_watcher.stop()
+
+        # Kill all PTY processes (this stops reader QThreads too)
+        self._pty_manager.kill_all()
+
+        # Properly delete all terminal widgets to free resources
+        for pane_id in list(self._terminal_widgets.keys()):
+            tw = self._terminal_widgets.pop(pane_id, None)
+            if tw is not None:
+                tw.deleteLater()
+
         super().closeEvent(event)
