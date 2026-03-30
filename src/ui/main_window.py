@@ -406,7 +406,12 @@ class MainWindow(QMainWindow):
         self._pty_manager.kill(pane_id)
         tw = self._terminal_widgets.pop(pane_id, None)
         if tw is not None:
-            tw.deleteLater()
+            try:
+                import sip
+                if not sip.isdeleted(tw):
+                    tw.deleteLater()
+            except (ImportError, RuntimeError):
+                pass
 
     def _on_pty_output(self, pane_id: str, data: bytes) -> None:
         """Forward PTY output to the corresponding TerminalWidget."""
@@ -554,9 +559,17 @@ class MainWindow(QMainWindow):
         self._pty_manager.kill_all()
 
         # Properly delete all terminal widgets to free resources
+        try:
+            import sip
+        except ImportError:
+            sip = None
         for pane_id in list(self._terminal_widgets.keys()):
             tw = self._terminal_widgets.pop(pane_id, None)
             if tw is not None:
-                tw.deleteLater()
+                try:
+                    if sip is None or not sip.isdeleted(tw):
+                        tw.deleteLater()
+                except RuntimeError:
+                    pass
 
         super().closeEvent(event)
