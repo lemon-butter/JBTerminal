@@ -85,11 +85,22 @@ class PaneView(QWidget):
 
     def set_widget(self, widget: QWidget) -> None:
         """Replace placeholder with actual terminal widget."""
-        # Remove old content
+        # Check if this widget is already in the content area
+        for i in range(self._content_area.count()):
+            item = self._content_area.itemAt(i)
+            if item and item.widget() is widget:
+                return  # already placed, nothing to do
+
+        # Remove old content (but don't delete terminal widgets — only placeholders)
         while self._content_area.count():
             item = self._content_area.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            w = item.widget()
+            if w and w is not widget:
+                if self._placeholder is not None and w is self._placeholder:
+                    w.deleteLater()
+                else:
+                    # Just remove from layout, don't delete (it may be reused)
+                    w.setParent(None)
         self._content_area.addWidget(widget)
         self._placeholder = None
 

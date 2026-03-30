@@ -34,20 +34,17 @@ class SplitPaneContainer(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(0)
 
-        # State
-        self._root: PaneNode = PaneLeaf()
+        # State — no default PaneLeaf; workspace sets the root via set_root()
+        self._root: PaneNode | None = None
         self._pane_views: dict[str, PaneView] = {}
-        self._active_pane_id: str = self._root.id
+        self._active_pane_id: str = ""
         self._root_widget: QWidget | None = None
 
         # Cache: root_id -> (widget, pane_views_dict)
         self._widget_cache: dict[str, tuple[QWidget, dict[str, PaneView]]] = {}
 
-        # Initial render
-        self._rebuild()
-
     @property
-    def root(self) -> PaneNode:
+    def root(self) -> PaneNode | None:
         return self._root
 
     def set_root(self, root: PaneNode) -> None:
@@ -139,6 +136,8 @@ class SplitPaneContainer(QWidget):
 
         Uses a cache to avoid destroying/recreating widgets on tab switch.
         """
+        if self._root is None:
+            return
         root_id = self._root.id
 
         # Hide current widget

@@ -304,49 +304,43 @@ class MainWindow(QMainWindow):
         if self._workspace:
             self._workspace.active_tab_index = self._tab_bar.active_index
 
-        # Kill old PTYs for current workspace
-        if self._workspace:
-            for tab in self._workspace.tabs:
-                for leaf in get_all_leaves(tab.pane_root):
-                    if self._pty_manager.has_process(leaf.id):
-                        self._pty_manager.kill(leaf.id)
-                    tw = self._terminal_widgets.pop(leaf.id, None)
-                    if tw is not None:
-                        try:
-                            import sip
-                            if not sip.isdeleted(tw):
-                                tw.deleteLater()
-                        except (ImportError, RuntimeError):
-                            pass
-
-        # Set new workspace
+        # Set new workspace FIRST (so tab_selected handler uses correct workspace)
         self._workspace = workspace
-
-        # Rebuild tab bar
-        # Remove all existing tabs
-        while self._tab_bar.tab_count > 1:
-            self._tab_bar.close_tab(self._tab_bar.tab_count - 1)
 
         # If workspace has no tabs, create one
         if not workspace.tabs:
             from src.models.pane_tree import PaneLeaf
             workspace.tabs = [WorkspaceTab(name="Terminal", pane_root=PaneLeaf())]
 
-        # Set first tab name, add remaining tabs
-        self._tab_bar.rename_tab(0, workspace.tabs[0].name)
-        for i in range(1, len(workspace.tabs)):
-            self._tab_bar.add_tab(workspace.tabs[i].name)
+        # Block tab signals during rebuild to prevent _on_tab_selected firing
+        self._tab_bar.blockSignals(True)
 
-        # Select the active tab
+        # Clear all existing tabs
+        while self._tab_bar.tab_count > 1:
+            self._tab_bar.close_tab(self._tab_bar.tab_count - 1)
+        # Remove the last one too (force)
+        if self._tab_bar.tab_count == 1:
+            # Can't use close_tab (refuses last), directly clear
+            tab_btn = self._tab_bar._tabs.pop(0)
+            self._tab_bar._layout.removeWidget(tab_btn)
+            tab_btn.deleteLater()
+            self._tab_bar._active_index = -1
+
+        # Add workspace tabs fresh
+        for tab in workspace.tabs:
+            self._tab_bar.add_tab(tab.name)
         self._tab_bar.select_tab(workspace.active_tab_index)
+
+        self._tab_bar.blockSignals(False)
 
         # Load the active tab's pane tree
         active = workspace.active_tab
         if active:
             self._split_pane.set_root(active.pane_root)
-            # Spawn PTYs for all visible panes
+            # Only spawn PTYs for panes that don't have one yet
             for leaf in get_all_leaves(active.pane_root):
-                self.pane_created.emit(leaf.id, workspace.path)
+                if not self._pty_manager.has_process(leaf.id):
+                    self.pane_created.emit(leaf.id, workspace.path)
 
     def _on_tab_added(self) -> None:
         cwd = self._workspace.path if self._workspace else ""
@@ -383,6 +377,12 @@ class MainWindow(QMainWindow):
             active = self._workspace.active_tab
             if active:
                 self._split_pane.set_root(active.pane_root)
+                # Re-place terminal widgets into pane views (they may be cached)
+                for leaf in get_all_leaves(active.pane_root):
+                    tw = self._terminal_widgets.get(leaf.id)
+                    pv = self._split_pane.get_pane_view(leaf.id)
+                    if tw is not None and pv is not None:
+                        pv.set_widget(tw)
 
     def _on_tab_renamed(self, index: int, new_name: str) -> None:
         if self._workspace:
