@@ -417,7 +417,11 @@ class MainWindow(QMainWindow):
         """Forward PTY output to the corresponding TerminalWidget."""
         tw = self._terminal_widgets.get(pane_id)
         if tw is not None:
-            tw.feed(data)
+            try:
+                tw.feed(data)
+            except RuntimeError:
+                # C++ widget already deleted
+                self._terminal_widgets.pop(pane_id, None)
 
     def _on_pty_exited(self, pane_id: str, exit_code: int) -> None:
         """Handle PTY process exit."""

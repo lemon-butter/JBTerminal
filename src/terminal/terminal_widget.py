@@ -376,8 +376,23 @@ class TerminalWidget(QWidget):
     #  Public API                                                         #
     # ------------------------------------------------------------------ #
 
+    def _is_alive(self) -> bool:
+        """Check if the underlying C++ QWidget is still valid."""
+        try:
+            import sip
+            return not sip.isdeleted(self)
+        except ImportError:
+            pass
+        try:
+            self.isVisible()
+            return True
+        except RuntimeError:
+            return False
+
     def feed(self, data: bytes) -> None:
         """Feed raw bytes from the PTY into the terminal emulator."""
+        if not self._is_alive():
+            return
         # Before feeding, save lines that scroll off the top
         old_top = self._top_line_content()
         try:
@@ -484,6 +499,10 @@ class TerminalWidget(QWidget):
 
     def _update_scrollbar(self) -> None:
         """Sync the scrollbar range/position with scrollback state."""
+        try:
+            _ = self._scrollbar.isVisible()  # probe if C++ object alive
+        except RuntimeError:
+            return
         self._scrollbar_updating = True
         total = len(self._scrollback)
         self._scrollbar.setRange(0, total)
