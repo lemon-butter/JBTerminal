@@ -756,36 +756,40 @@ class TerminalWidget(QWidget):
                 if is_match:
                     bg_color = search_current_bg if is_current else search_bg
 
-                # Determine character width
+                # Determine character data and width
                 data = char.data if hasattr(char, 'data') else " "
+
+                # Skip the "shadow" cell of a double-wide char (pyte puts '' there)
+                if data == '':
+                    continue
+
+                import unicodedata
                 char_width = 1
-                if data and data != " ":
-                    import unicodedata
+                if data and data != " " and len(data) > 0:
                     eaw = unicodedata.east_asian_width(data[0])
-                    # Only East Asian Wide/Fullwidth are truly double-width
-                    # (CJK ideographs, fullwidth latin, etc.)
-                    # Private Use Area and Ambiguous width stay single-width
-                    # because terminal emulators treat them as single-width
                     if eaw in ("W", "F"):
                         char_width = 2
 
+                # Cell geometry — use float coords for gap-free rendering
+                x1 = int(col_idx * cw)
+                x2 = int((col_idx + char_width) * cw)
+                y1 = int(row_idx * ch)
+                y2 = int((row_idx + 1) * ch)
+                cell_rect = QRect(x1, y1, x2 - x1, y2 - y1)
+
                 # Draw cell background
-                cell_w = int(cw * char_width) + 1
-                cell_rect = QRect(int(x), int(y), cell_w, int(ch) + 1)
                 if bg_color != default_bg or selected or is_match:
                     painter.fillRect(cell_rect, bg_color)
 
                 # Draw character
                 if data and data != " ":
-                    need_restore = False
                     if hasattr(char, 'bold') and char.bold:
                         painter.font().setBold(True)
-                        need_restore = True
                     if hasattr(char, 'italics') and char.italics:
                         painter.font().setItalic(True)
-                        need_restore = True
                     painter.setPen(fg_color)
-                    painter.drawText(int(x) + 1, int(y + baseline), data)
+                    painter.drawText(x1 + 1, int(y + baseline), data)
+                    painter.setFont(self._font)  # always restore
                     if need_restore:
                         painter.setFont(self._font)
 
