@@ -398,11 +398,14 @@ class TerminalWidget(QWidget):
         old_top = self._top_line_content()
         try:
             text = data.decode("utf-8", errors="replace")
-            # Strip OSC sequences that pyte doesn't handle (e.g. hyperlinks \x1b]8;...ST)
+            # Strip ALL OSC sequences (\x1b] ... ST) that pyte doesn't handle
+            # ST = \x1b\\ or \x07 (BEL). Match non-greedily across the content.
             import re
-            text = re.sub(r'\x1b\]8;[^\x1b]*(?:\x1b\\|\x07)', '', text)
-            # Strip other unhandled OSC sequences (title set, etc.)
-            text = re.sub(r'\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
+            text = re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
+            # Strip APC sequences (\x1b_ ... ST)
+            text = re.sub(r'\x1b_.*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
+            # Strip PM sequences (\x1b^ ... ST)
+            text = re.sub(r'\x1b\^.*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
             self._stream.feed(text)
         except Exception:
             pass
