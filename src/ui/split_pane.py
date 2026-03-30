@@ -40,6 +40,9 @@ class SplitPaneContainer(QWidget):
         self._active_pane_id: str = self._root.id
         self._root_widget: QWidget | None = None
 
+        # Cache: root_id -> (widget, pane_views_dict)
+        self._widget_cache: dict[str, tuple[QWidget, dict[str, PaneView]]] = {}
+
         # Initial render
         self._rebuild()
 
@@ -83,8 +86,10 @@ class SplitPaneContainer(QWidget):
             second=new_leaf,
         )
 
+        old_root_id = self._root.id
         self._root = replace_node(self._root, pane_id, split_node)
         self._active_pane_id = new_leaf.id
+        self._invalidate_cache(old_root_id)
         self._rebuild()
         return new_leaf.id
 
@@ -94,9 +99,10 @@ class SplitPaneContainer(QWidget):
         if len(leaves) <= 1:
             return False  # Cannot close the last pane
 
+        old_root_id = self._root.id
+
         parent = find_parent(self._root, pane_id)
         if parent is None:
-            # pane_id is root leaf — shouldn't happen if len > 1
             return False
 
         # Replace parent with the sibling
@@ -111,6 +117,8 @@ class SplitPaneContainer(QWidget):
             self._root = sibling
         else:
             self._root = replace_node(self._root, parent.id, sibling)
+
+        self._invalidate_cache(old_root_id)
 
         # Update active pane
         remaining = get_all_leaves(self._root)
@@ -127,18 +135,31 @@ class SplitPaneContainer(QWidget):
             self.pane_focused.emit(pane_id)
 
     def _rebuild(self) -> None:
-        """Rebuild the widget tree from the pane model."""
-        # Remove old root widget
+        """Rebuild the widget tree from the pane model.
+
+        Uses a cache to avoid destroying/recreating widgets on tab switch.
+        """
+        root_id = self._root.id
+
+        # Hide current widget
         if self._root_widget is not None:
-            self._layout.removeWidget(self._root_widget)
-            self._root_widget.deleteLater()
-            self._root_widget = None
+            self._root_widget.hide()
 
-        self._pane_views.clear()
-
-        # Build new widget tree
-        self._root_widget = self._build_widget(self._root)
-        self._layout.addWidget(self._root_widget)
+        # Check cache
+        if root_id in self._widget_cache:
+            cached_widget, cached_views = self._widget_cache[root_id]
+            self._root_widget = cached_widget
+            self._pane_views = cached_views
+            if cached_widget.parent() is None:
+                self._layout.addWidget(cached_widget)
+            cached_widget.show()
+        else:
+            # Build new widget tree
+            self._pane_views = {}
+            self._root_widget = self._build_widget(self._root)
+            self._layout.addWidget(self._root_widget)
+            # Cache it
+            self._widget_cache[root_id] = (self._root_widget, dict(self._pane_views))
 
         # Update close button visibility
         leaves = get_all_leaves(self._root)
@@ -171,6 +192,13 @@ class SplitPaneContainer(QWidget):
         splitter.setSizes([first_size, second_size])
 
         return splitter
+
+    def _invalidate_cache(self, root_id: str) -> None:
+        """Remove a cached widget tree (structure changed, must rebuild)."""
+        entry = self._widget_cache.pop(root_id, None)
+        if entry is not None:
+            widget, _ = entry
+            widget.deleteLater()
 
     def _on_split_requested(self, pane_id: str, direction: str) -> None:
         """Handle split request from PaneView."""

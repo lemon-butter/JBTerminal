@@ -6,7 +6,7 @@ from dataclasses import dataclass
 @dataclass
 class TerminalConfig:
     """Per-terminal configuration."""
-    font_family: str = "JetBrains Mono"
+    font_family: str = "Menlo"
     font_size: int = 14
     line_spacing: float = 1.0
     scrollback_lines: int = 10000

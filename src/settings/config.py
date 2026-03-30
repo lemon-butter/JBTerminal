@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 DEFAULT_CONFIG_PATH = Path.home() / ".jbterminal" / "config.json"
 
 DEFAULT_VALUES: Dict[str, Any] = {
-    "font_family": "JetBrains Mono",
+    "font_family": "Menlo",
     "font_size": 14,
     "theme": "Neon Dark",
     "line_spacing": 1.0,

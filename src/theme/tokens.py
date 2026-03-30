@@ -100,7 +100,7 @@ DIMENSIONS = {
 
 FONTS = {
     "ui_family":       "SF Pro Display, Inter, system-ui, sans-serif",
-    "mono_family":     "JetBrains Mono, Fira Code, Menlo, monospace",
+    "mono_family":     "Menlo, JetBrains Mono, Fira Code, monospace",
     "ui_size":         13,
     "ui_label_size":   12,
     "ui_header_size":  16,
