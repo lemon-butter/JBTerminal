@@ -474,13 +474,24 @@ class MainWindow(QMainWindow):
     #  PTY Integration                                                     #
     # ------------------------------------------------------------------ #
 
+    def _make_terminal_config(self) -> TerminalConfig:
+        """Build TerminalConfig from saved settings."""
+        font = self._config.get_font()
+        return TerminalConfig(
+            font_family=str(font["family"]),
+            font_size=int(font["size"]),
+            line_spacing=float(self._config.get("line_spacing", 1.0)),
+            scrollback_lines=int(self._config.get("scrollback_lines", 10000)),
+            cursor_blink=bool(self._config.get("cursor_blink", True)),
+        )
+
     def _on_pane_created(self, pane_id: str, cwd: str) -> None:
         """Spawn a PTY and wire up a TerminalWidget for a new pane."""
         if not cwd:
             cwd = os.path.expanduser("~")
 
-        # Create terminal widget
-        tw = TerminalWidget()
+        # Create terminal widget with saved config
+        tw = TerminalWidget(config=self._make_terminal_config())
         self._terminal_widgets[pane_id] = tw
 
         # Connect terminal widget signals to PTY
@@ -556,7 +567,9 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_font_applied(self, family: str, size: int) -> None:
-        """Update all terminal widgets when font changes."""
+        """Update all terminal widgets and save to config."""
+        self._config.set_font(family, size)
+        self._config.save()
         for tw in self._terminal_widgets.values():
             cfg = TerminalConfig(
                 font_family=family,
@@ -568,21 +581,25 @@ class MainWindow(QMainWindow):
             tw.set_config(cfg)
 
     def _on_theme_applied(self, theme_name: str) -> None:
-        """Switch the active theme and reapply QSS."""
+        """Switch the active theme, reapply QSS, and save to config."""
+        self._config.set_theme(theme_name)
+        self._config.save()
         app = QApplication.instance()
-        if app is not None:
-            tm = app.property("theme_manager")
-            if tm is not None:
-                try:
-                    tm.set_active(theme_name)
-                    tm.apply_theme(app)
-                except KeyError:
-                    pass
+        if app is not None and hasattr(app, '_theme_manager'):
+            try:
+                app._theme_manager.set_active(theme_name)
+                app._theme_manager.apply_theme(app)
+            except KeyError:
+                pass
 
     def _on_terminal_applied(
         self, line_spacing: float, scrollback: int, cursor_blink: bool
     ) -> None:
-        """Update all terminal widgets when terminal settings change."""
+        """Update all terminal widgets and save to config."""
+        self._config.set("line_spacing", line_spacing)
+        self._config.set("scrollback_lines", scrollback)
+        self._config.set("cursor_blink", cursor_blink)
+        self._config.save()
         for tw in self._terminal_widgets.values():
             cfg = TerminalConfig(
                 font_family=tw._config.font_family,
