@@ -299,6 +299,9 @@ class TerminalWidget(QWidget):
         self._screen.set_mode(pyte.modes.LNM)  # auto line-feed on CR
         self._stream = pyte.Stream(self._screen)
 
+        # Pending incomplete escape sequence from previous feed() call
+        self._pending_data = b""
+
         # Scrollback
         self._scrollback: List[dict] = []  # list of row dicts (line -> char)
         self._scrollback_max = self._config.scrollback_lines
@@ -397,15 +400,27 @@ class TerminalWidget(QWidget):
         # Before feeding, save lines that scroll off the top
         old_top = self._top_line_content()
         try:
+            # Prepend any pending data from previous chunk
+            data = self._pending_data + data
+            self._pending_data = b""
+
+            # If data ends with an incomplete escape sequence, buffer it
+            # Look for a trailing ESC that might be start of a sequence
+            last_esc = data.rfind(b'\x1b')
+            if last_esc >= 0 and last_esc > len(data) - 32:
+                # Check if there's a complete terminator after this ESC
+                tail = data[last_esc:]
+                if b'\x07' not in tail and b'\x1b\\' not in tail[1:]:
+                    # Possibly incomplete — buffer from ESC onward
+                    self._pending_data = data[last_esc:]
+                    data = data[:last_esc]
+
             text = data.decode("utf-8", errors="replace")
-            # Strip ALL OSC sequences (\x1b] ... ST) that pyte doesn't handle
-            # ST = \x1b\\ or \x07 (BEL). Match non-greedily across the content.
+
+            # Strip escape sequences pyte can't handle
             import re
-            text = re.sub(r'\x1b\].*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
-            # Strip APC sequences (\x1b_ ... ST)
-            text = re.sub(r'\x1b_.*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
-            # Strip PM sequences (\x1b^ ... ST)
-            text = re.sub(r'\x1b\^.*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
+            # OSC (\x1b] ... BEL/ST), APC (\x1b_), PM (\x1b^)
+            text = re.sub(r'\x1b[\]_^].*?(?:\x1b\\|\x07)', '', text, flags=re.DOTALL)
             self._stream.feed(text)
         except Exception:
             pass
