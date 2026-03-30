@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtWidgets import (
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -179,11 +180,30 @@ class Sidebar(QWidget):
                         widget.update_state(state)
                 break
 
+    @staticmethod
+    def _pick_folder() -> str:
+        """Open a native macOS folder picker, or Qt fallback on other OS."""
+        if sys.platform == "darwin":
+            try:
+                from AppKit import NSOpenPanel, NSModalResponseOK
+                panel = NSOpenPanel.openPanel()
+                panel.setCanChooseDirectories_(True)
+                panel.setCanChooseFiles_(False)
+                panel.setAllowsMultipleSelection_(False)
+                result = panel.runModal()
+                if result == NSModalResponseOK:
+                    urls = panel.URLs()
+                    if urls and len(urls) > 0:
+                        return str(urls[0].path())
+                return ""
+            except ImportError:
+                pass
+        # Fallback: Qt dialog
+        from PyQt6.QtWidgets import QFileDialog
+        return QFileDialog.getExistingDirectory(None, "Select Workspace Folder")
+
     def _on_add_workspace(self) -> None:
-        path = QFileDialog.getExistingDirectory(
-            self, "Select Workspace Folder", "",
-            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
-        )
+        path = self._pick_folder()
         if path:
             import os
             name = os.path.basename(path)
