@@ -1,0 +1,173 @@
+/* JBTerminal — Neon Glow Theme
+   Tokens: @token_name → replaced at runtime by ThemeManager */
+
+/* === Global === */
+QWidget {
+    background-color: @bg_primary;
+    color: @text_primary;
+    font-size: 13px;
+}
+
+/* === Main Window === */
+QMainWindow#main_window {
+    background-color: @bg_primary;
+}
+
+/* === Sidebar === */
+QWidget#sidebar {
+    background-color: @bg_secondary;
+    border-right: 1px solid @border_default;
+}
+
+/* === Tab Bar === */
+QTabBar#tab_bar {
+    background-color: @bg_secondary;
+}
+
+QTabBar#tab_bar::tab {
+    background-color: @bg_secondary;
+    border: 1px solid @border_default;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 6px 16px;
+    color: @text_muted;
+}
+
+QTabBar#tab_bar::tab:selected {
+    background-color: @bg_primary;
+    border-color: @accent_medium;
+    color: @accent;
+}
+
+QTabBar#tab_bar::tab:hover:!selected {
+    background-color: @bg_hover;
+    color: @text_secondary;
+}
+
+/* === Pane === */
+QWidget#pane_view {
+    background-color: @bg_primary;
+}
+
+QWidget#pane_header {
+    background-color: @bg_secondary;
+    border-bottom: 1px solid @border_default;
+    padding: 4px 8px;
+}
+
+QWidget#pane_divider {
+    background-color: @border_default;
+}
+
+QWidget#pane_divider:hover {
+    background-color: @accent_medium;
+}
+
+/* === Terminal === */
+QWidget#terminal {
+    background-color: @bg_terminal;
+    border: none;
+}
+
+/* === Status Bar === */
+QWidget#status_bar {
+    background-color: @bg_secondary;
+    border-top: 1px solid @border_default;
+}
+
+/* === Buttons === */
+QPushButton {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 @bg_tertiary, stop:1 @bg_secondary);
+    border: 1px solid @border_default;
+    border-radius: 8px;
+    color: @accent;
+    padding: 6px 16px;
+}
+
+QPushButton:hover {
+    border-color: @accent_medium;
+    background-color: @bg_hover;
+}
+
+QPushButton:pressed {
+    background-color: @accent;
+    color: @bg_primary;
+}
+
+QPushButton:disabled {
+    background-color: @bg_secondary;
+    border-color: @border_default;
+    color: @text_disabled;
+}
+
+/* === Input === */
+QLineEdit {
+    background-color: @bg_secondary;
+    border: 1px solid @border_default;
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: @text_primary;
+    selection-background-color: @accent;
+    selection-color: @bg_primary;
+}
+
+QLineEdit:focus {
+    border: 2px solid @accent_strong;
+}
+
+/* === Scrollbar === */
+QScrollBar:vertical {
+    background-color: @bg_primary;
+    width: 8px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: @border_default;
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: @accent_medium;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: @bg_primary;
+    height: 8px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: @border_default;
+    border-radius: 4px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: @accent_medium;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* === Settings Dialog === */
+QDialog#settings_dialog {
+    background-color: @bg_primary;
+}
+
+/* === Tooltips === */
+QToolTip {
+    background-color: @bg_tertiary;
+    border: 1px solid @accent_medium;
+    border-radius: 4px;
+    color: @text_primary;
+    padding: 4px 8px;
+}
