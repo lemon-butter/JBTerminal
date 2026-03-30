@@ -190,6 +190,9 @@ class Sidebar(QWidget):
                 panel.setCanChooseDirectories_(True)
                 panel.setCanChooseFiles_(False)
                 panel.setAllowsMultipleSelection_(False)
+                panel.setTitle_("워크스페이스 폴더 선택")
+                panel.setMessage_("워크스페이스로 사용할 폴더를 선택하세요")
+                panel.setPrompt_("선택")
                 result = panel.runModal()
                 if result == NSModalResponseOK:
                     urls = panel.URLs()
