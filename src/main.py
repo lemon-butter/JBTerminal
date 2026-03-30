@@ -1,8 +1,18 @@
 """JBTerminal — AI CLI desktop terminal application."""
 
 import logging
+import os
 import sys
 import traceback
+
+# Ensure Qt can find its platform plugins
+try:
+    import PyQt6
+    _qt_plugin_dir = os.path.join(os.path.dirname(PyQt6.__file__), "Qt6", "plugins")
+    if os.path.isdir(_qt_plugin_dir):
+        os.environ.setdefault("QT_PLUGIN_PATH", _qt_plugin_dir)
+except ImportError:
+    pass
 
 from src.app import create_app
 from src.ui.main_window import MainWindow

@@ -146,16 +146,17 @@ class MainWindow(QMainWindow):
         self._usage_monitor.usage_updated.connect(self._on_usage_updated)
         self._status_bar.settings_clicked.connect(self._on_open_settings)
 
-        # --- Start monitors ---
-        self._usage_monitor.start()
-        self._session_watcher.start()
+        # --- Start monitors (deferred to avoid crash during init) ---
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1000, self._usage_monitor.start)
+        QTimer.singleShot(1500, self._session_watcher.start)
 
         # --- Theme change connection ---
+        # ThemeManager is stored as app attribute (not QProperty, to avoid
+        # QVariant conversion segfault on macOS)
         app = QApplication.instance()
-        if app is not None:
-            tm = app.property("theme_manager")
-            if tm is not None:
-                tm.theme_changed.connect(self._on_theme_changed)
+        if app is not None and hasattr(app, '_theme_manager'):
+            app._theme_manager.theme_changed.connect(self._on_theme_changed)
 
         # --- Keyboard shortcuts ---
         self._setup_shortcuts()

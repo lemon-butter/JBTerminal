@@ -101,6 +101,9 @@ class PtyManager(QObject):
     def spawn(self, pane_id: str, cwd: str, shell: str = "") -> bool:
         """Spawn a new PTY process for the given pane.
 
+        Uses subprocess.Popen with PTY slave as stdin/stdout/stderr.
+        This avoids os.fork() which is unsafe after Qt is initialized on macOS.
+
         Returns True on success, False on failure.
         """
         if pane_id in self._processes:
@@ -121,59 +124,50 @@ class PtyManager(QObject):
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
             fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
 
-            # Spawn the shell process
-            pid = os.fork()
-            if pid == 0:
-                # Child process
-                os.close(master_fd)
-                os.setsid()
+            # Build environment
+            env = os.environ.copy()
+            env["TERM"] = "xterm-256color"
+            env.setdefault("LANG", "en_US.UTF-8")
 
-                # Set the slave as controlling terminal
-                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+            # Spawn via subprocess.Popen — safe with Qt (no os.fork in parent)
+            process = subprocess.Popen(
+                [shell, "-l"],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=cwd,
+                env=env,
+                start_new_session=True,
+                close_fds=True,
+            )
 
-                # Redirect std streams to the slave PTY
-                os.dup2(slave_fd, 0)
-                os.dup2(slave_fd, 1)
-                os.dup2(slave_fd, 2)
-                if slave_fd > 2:
-                    os.close(slave_fd)
+            # Close slave in parent — only master is needed
+            os.close(slave_fd)
 
-                os.chdir(cwd)
+            pid = process.pid
 
-                # Set TERM environment variable
-                os.environ["TERM"] = "xterm-256color"
-                os.environ["LANG"] = os.environ.get("LANG", "en_US.UTF-8")
+            proc = PtyProcess(
+                pane_id=pane_id,
+                pid=pid,
+                fd=master_fd,
+                cwd=cwd,
+                cols=cols,
+                rows=rows,
+            )
 
-                os.execvp(shell, [shell, "-l"])
-                # execvp does not return; if it fails the child exits
-            else:
-                # Parent process
-                os.close(slave_fd)
+            # Start reader thread
+            reader = PtyReaderThread(pane_id, master_fd, pid, self)
+            reader.data_ready.connect(self._on_data_ready)
+            reader.process_exited.connect(self._on_process_exited)
+            proc.reader_thread = reader
+            self._processes[pane_id] = proc
 
-                proc = PtyProcess(
-                    pane_id=pane_id,
-                    pid=pid,
-                    fd=master_fd,
-                    cwd=cwd,
-                    cols=cols,
-                    rows=rows,
-                )
-
-                # Start reader thread
-                reader = PtyReaderThread(pane_id, master_fd, pid, self)
-                reader.data_ready.connect(self._on_data_ready)
-                reader.process_exited.connect(self._on_process_exited)
-                proc.reader_thread = reader
-                self._processes[pane_id] = proc
-
-                reader.start()
-                self.pty_spawned.emit(pane_id)
-                return True
+            reader.start()
+            self.pty_spawned.emit(pane_id)
+            return True
 
         except Exception:
             return False
-
-        return False  # unreachable but satisfies type checker
 
     def write(self, pane_id: str, data: bytes) -> None:
         """Write data to PTY stdin."""

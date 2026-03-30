@@ -28,8 +28,8 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     theme_manager.set_active(DARK_PRESET["name"])
     theme_manager.apply_theme(app)
 
-    # Store on app so other code can access it
-    app.setProperty("theme_manager", theme_manager)  # type: ignore[arg-type]
+    # Store on app as Python attribute (avoid QVariant/setProperty segfault)
+    app._theme_manager = theme_manager  # type: ignore[attr-defined]
 
     # --- App icon ---
     try:
