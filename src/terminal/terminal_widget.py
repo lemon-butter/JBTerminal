@@ -396,7 +396,13 @@ class TerminalWidget(QWidget):
         # Before feeding, save lines that scroll off the top
         old_top = self._top_line_content()
         try:
-            self._stream.feed(data.decode("utf-8", errors="replace"))
+            text = data.decode("utf-8", errors="replace")
+            # Strip OSC sequences that pyte doesn't handle (e.g. hyperlinks \x1b]8;...ST)
+            import re
+            text = re.sub(r'\x1b\]8;[^\x1b]*(?:\x1b\\|\x07)', '', text)
+            # Strip other unhandled OSC sequences (title set, etc.)
+            text = re.sub(r'\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)', '', text)
+            self._stream.feed(text)
         except Exception:
             pass
         new_top = self._top_line_content()
@@ -792,10 +798,12 @@ class TerminalWidget(QWidget):
                     painter.setFont(self._font)
 
                 # Underline
-                if hasattr(char, 'underscore') and char.underscore:
-                    painter.setPen(fg_color)
-                    uy = int(y + ch - 1)
-                    painter.drawLine(int(x), uy, int(x + cw), uy)
+                if hasattr(char, 'underscore') and char.underscore and data.strip():
+                    pen = QPen(fg_color)
+                    pen.setStyle(Qt.PenStyle.DotLine)
+                    painter.setPen(pen)
+                    uy = y2 - 1
+                    painter.drawLine(x1, uy, x2, uy)
 
         # ---- Draw cursor ----
         if self._cursor_visible and self._scroll_offset == 0:
