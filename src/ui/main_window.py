@@ -125,6 +125,7 @@ class MainWindow(QMainWindow):
 
         # --- Signal connections (UI) ---
         self._sidebar.workspace_selected.connect(self._on_workspace_selected)
+        self._sidebar.workspace_added.connect(self._on_workspace_added)
         self._tab_bar.tab_added.connect(self._on_tab_added)
         self._tab_bar.tab_closed.connect(self._on_tab_closed)
         self._tab_bar.tab_selected.connect(self._on_tab_selected)
@@ -251,8 +252,74 @@ class MainWindow(QMainWindow):
 
     # --- Signal handlers ---
 
+    def _on_workspace_added(self, path: str) -> None:
+        """A new workspace was added via sidebar '+' — auto-select it."""
+        # Find the workspace object that was just added
+        for ws in self._sidebar._workspaces:
+            if ws.path == path:
+                self._switch_to_workspace(ws)
+                break
+
     def _on_workspace_selected(self, path: str) -> None:
+        """Sidebar workspace clicked — switch to it."""
+        for ws in self._sidebar._workspaces:
+            if ws.path == path:
+                self._switch_to_workspace(ws)
+                break
         self.workspace_selected.emit(path)
+
+    def _switch_to_workspace(self, workspace: Workspace) -> None:
+        """Switch the entire work area to a different workspace."""
+        if self._workspace and self._workspace.id == workspace.id:
+            return  # already active
+
+        # Save current workspace's tab state
+        if self._workspace:
+            self._workspace.active_tab_index = self._tab_bar.active_index
+
+        # Kill old PTYs for current workspace
+        if self._workspace:
+            for tab in self._workspace.tabs:
+                for leaf in get_all_leaves(tab.pane_root):
+                    if self._pty_manager.has_process(leaf.id):
+                        self._pty_manager.kill(leaf.id)
+                    tw = self._terminal_widgets.pop(leaf.id, None)
+                    if tw is not None:
+                        try:
+                            import sip
+                            if not sip.isdeleted(tw):
+                                tw.deleteLater()
+                        except (ImportError, RuntimeError):
+                            pass
+
+        # Set new workspace
+        self._workspace = workspace
+
+        # Rebuild tab bar
+        # Remove all existing tabs
+        while self._tab_bar.tab_count > 1:
+            self._tab_bar.close_tab(self._tab_bar.tab_count - 1)
+
+        # If workspace has no tabs, create one
+        if not workspace.tabs:
+            from src.models.pane_tree import PaneLeaf
+            workspace.tabs = [WorkspaceTab(name="Terminal", pane_root=PaneLeaf())]
+
+        # Set first tab name, add remaining tabs
+        self._tab_bar.rename_tab(0, workspace.tabs[0].name)
+        for i in range(1, len(workspace.tabs)):
+            self._tab_bar.add_tab(workspace.tabs[i].name)
+
+        # Select the active tab
+        self._tab_bar.select_tab(workspace.active_tab_index)
+
+        # Load the active tab's pane tree
+        active = workspace.active_tab
+        if active:
+            self._split_pane.set_root(active.pane_root)
+            # Spawn PTYs for all visible panes
+            for leaf in get_all_leaves(active.pane_root):
+                self.pane_created.emit(leaf.id, workspace.path)
 
     def _on_tab_added(self) -> None:
         cwd = self._workspace.path if self._workspace else ""
@@ -510,32 +577,20 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _restore_layout_or_default(self) -> None:
-        """Restore saved layout from config, or create a default tab with PTY."""
+        """Restore saved layout from config, or create a default workspace."""
         layouts = self._config.load_layout()
         if layouts:
-            # Restore workspaces into sidebar
             for ws_data in layouts:
                 workspace = self._config.restore_workspace_from_layout(ws_data)
                 self._sidebar.add_workspace(workspace)
-            # Select the first workspace
-            if layouts:
-                first_ws = self._config.restore_workspace_from_layout(layouts[0])
-                self.set_workspace(first_ws)
-                # Spawn PTYs for all visible panes
-                if first_ws.active_tab:
-                    for leaf in get_all_leaves(first_ws.active_tab.pane_root):
-                        self.pane_created.emit(leaf.id, first_ws.path)
+            # Switch to the first workspace
+            if self._sidebar._workspaces:
+                self._switch_to_workspace(self._sidebar._workspaces[0])
         else:
-            # No saved layout — start with a default workspace + terminal
-            from src.models.pane_tree import PaneLeaf
+            # No saved layout — create a default Home workspace
             default_ws = Workspace(name="Home", path=os.path.expanduser("~"))
-            self._workspace = default_ws
-            self._tab_bar.add_tab("Terminal")
-            root = self._split_pane.root
-            # Spawn PTY for the initial pane
-            leaves = get_all_leaves(root)
-            if leaves:
-                self.pane_created.emit(leaves[0].id, default_ws.path)
+            self._sidebar.add_workspace(default_ws)
+            self._switch_to_workspace(default_ws)
 
     def _save_layout(self) -> None:
         """Save current workspace layouts to config."""
