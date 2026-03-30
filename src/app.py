@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from PyQt6.QtWidgets import QApplication
 
-from src.theme.tokens import COLORS, FONTS
+from src.theme.theme_manager import ThemeManager
+from src.theme.presets.default_dark import PRESET as DARK_PRESET
+from src.theme.presets.default_light import PRESET as LIGHT_PRESET
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
@@ -15,13 +15,14 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     app.setApplicationName("JBTerminal")
     app.setOrganizationName("JBTerminal")
 
-    # Load global QSS
-    qss_path = Path(__file__).parent / "theme" / "neon_theme.qss"
-    if qss_path.exists():
-        qss = qss_path.read_text()
-        # Replace token placeholders with actual values
-        for key, value in COLORS.items():
-            qss = qss.replace(f"@{key}", value)
-        app.setStyleSheet(qss)
+    # --- Theme ---
+    theme_manager = ThemeManager()
+    theme_manager.load_preset(DARK_PRESET["name"], DARK_PRESET["colors"])
+    theme_manager.load_preset(LIGHT_PRESET["name"], LIGHT_PRESET["colors"])
+    theme_manager.set_active(DARK_PRESET["name"])
+    theme_manager.apply_theme(app)
+
+    # Store on app so other code can access it
+    app.setProperty("theme_manager", theme_manager)  # type: ignore[arg-type]
 
     return app
