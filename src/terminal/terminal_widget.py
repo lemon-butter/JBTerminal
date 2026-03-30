@@ -963,7 +963,8 @@ class TerminalWidget(QWidget):
             seq = _QT_KEY_TO_VT100[key]
             # Application cursor mode
             if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Right, Qt.Key.Key_Left):
-                if pyte.modes.DECAPPKEY in self._screen.mode:
+                _decappkey = getattr(pyte.modes, "DECAPPKEY", None)
+                if _decappkey is not None and _decappkey in self._screen.mode:
                     seq = seq.replace(b"[", b"O")
             self.input_ready.emit(seq)
             return
