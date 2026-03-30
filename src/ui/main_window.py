@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+from typing import Dict, Optional
+
 from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QMainWindow,
     QSplitter,
@@ -12,10 +16,17 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.models.enums import SplitDirection
+from src.models.enums import PaneState, SplitDirection
 from src.models.workspace import Workspace, WorkspaceTab
 from src.models.pane_tree import get_all_leaves
+from src.settings.config import Config
+from src.settings.settings_dialog import SettingsDialog
+from src.status.session_watcher import SessionWatcher
+from src.status.state_detector import StateDetector
 from src.status.status_bar import StatusBar
+from src.status.usage_monitor import UsageMonitor
+from src.terminal.pty_manager import PtyManager
+from src.terminal.terminal_widget import TerminalWidget
 from src.ui.sidebar import Sidebar
 from src.ui.split_pane import SplitPaneContainer
 from src.ui.tab_bar import TerminalTabBar
@@ -38,6 +49,23 @@ class MainWindow(QMainWindow):
 
         # Current workspace
         self._workspace: Workspace | None = None
+
+        # --- PTY Manager ---
+        self._pty_manager = PtyManager(self)
+        self._terminal_widgets: Dict[str, TerminalWidget] = {}
+
+        # --- State Detector ---
+        self._state_detector = StateDetector(self)
+
+        # --- Usage Monitor ---
+        self._usage_monitor = UsageMonitor(self)
+
+        # --- Session Watcher ---
+        self._session_watcher = SessionWatcher(self)
+
+        # --- Config ---
+        self._config = Config()
+        self._config.load()
 
         # --- Central widget ---
         central = QWidget()
@@ -80,7 +108,7 @@ class MainWindow(QMainWindow):
         # Set initial splitter sizes: sidebar 240px, work area gets the rest
         self._main_splitter.setSizes([240, 960])
 
-        # --- Signal connections ---
+        # --- Signal connections (UI) ---
         self._sidebar.workspace_selected.connect(self._on_workspace_selected)
         self._tab_bar.tab_added.connect(self._on_tab_added)
         self._tab_bar.tab_closed.connect(self._on_tab_closed)
@@ -89,6 +117,29 @@ class MainWindow(QMainWindow):
         self._split_pane.pane_split_requested.connect(self._on_pane_split_requested)
         self._split_pane.pane_close_requested.connect(self._on_pane_close_requested)
         self._split_pane.pane_focused.connect(self._on_pane_focused)
+
+        # --- Signal connections (PTY integration) ---
+        self._pty_manager.pty_output.connect(self._on_pty_output)
+        self._pty_manager.pty_exited.connect(self._on_pty_exited)
+        self.pane_created.connect(self._on_pane_created)
+        self.pane_closed.connect(self._on_pane_closed_cleanup)
+
+        # --- Signal connections (Status integration) ---
+        self._pty_manager.pty_output.connect(self._state_detector.feed)
+        self._state_detector.state_changed.connect(self._on_state_changed)
+        self._usage_monitor.usage_updated.connect(self._on_usage_updated)
+        self._status_bar.settings_clicked.connect(self._on_open_settings)
+
+        # --- Start monitors ---
+        self._usage_monitor.start()
+        self._session_watcher.start()
+
+        # --- Theme change connection ---
+        app = QApplication.instance()
+        if app is not None:
+            tm = app.property("theme_manager")
+            if tm is not None:
+                tm.theme_changed.connect(self._on_theme_changed)
 
         # --- Keyboard shortcuts ---
         self._setup_shortcuts()
@@ -174,8 +225,8 @@ class MainWindow(QMainWindow):
         self._sidebar.setVisible(not self._sidebar.isVisible())
 
     def _on_open_settings(self) -> None:
-        # Settings dialog will be handled by Team D
-        pass
+        dialog = SettingsDialog(config=self._config, parent=self)
+        dialog.exec()
 
     # --- Signal handlers ---
 
@@ -247,3 +298,86 @@ class MainWindow(QMainWindow):
             if active:
                 active.active_pane_id = pane_id
         self.pane_focused.emit(pane_id)
+
+    # ------------------------------------------------------------------ #
+    #  PTY Integration                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _on_pane_created(self, pane_id: str, cwd: str) -> None:
+        """Spawn a PTY and wire up a TerminalWidget for a new pane."""
+        if not cwd:
+            cwd = os.path.expanduser("~")
+
+        # Create terminal widget
+        tw = TerminalWidget()
+        self._terminal_widgets[pane_id] = tw
+
+        # Connect terminal widget signals to PTY
+        tw.input_ready.connect(lambda data, pid=pane_id: self._pty_manager.write(pid, data))
+        tw.size_changed.connect(lambda cols, rows, pid=pane_id: self._pty_manager.resize(pid, cols, rows))
+
+        # Place widget in its pane view
+        pane_view = self._split_pane.get_pane_view(pane_id)
+        if pane_view is not None:
+            pane_view.set_widget(tw)
+
+        # Spawn the PTY process
+        self._pty_manager.spawn(pane_id, cwd)
+
+    def _on_pane_closed_cleanup(self, pane_id: str) -> None:
+        """Kill PTY and clean up terminal widget when a pane is closed."""
+        self._pty_manager.kill(pane_id)
+        tw = self._terminal_widgets.pop(pane_id, None)
+        if tw is not None:
+            tw.deleteLater()
+
+    def _on_pty_output(self, pane_id: str, data: bytes) -> None:
+        """Forward PTY output to the corresponding TerminalWidget."""
+        tw = self._terminal_widgets.get(pane_id)
+        if tw is not None:
+            tw.feed(data)
+
+    def _on_pty_exited(self, pane_id: str, exit_code: int) -> None:
+        """Handle PTY process exit."""
+        tw = self._terminal_widgets.get(pane_id)
+        if tw is not None:
+            tw.feed(f"\r\n[Process exited with code {exit_code}]\r\n".encode("utf-8"))
+
+    # ------------------------------------------------------------------ #
+    #  Status Integration                                                  #
+    # ------------------------------------------------------------------ #
+
+    def _on_state_changed(self, pane_id: str, state: str) -> None:
+        """Update sidebar workspace state when Claude Code state changes."""
+        if self._workspace:
+            self._sidebar.update_workspace_state(
+                self._workspace.id, PaneState(state)
+            )
+
+    def _on_usage_updated(self, data: dict) -> None:
+        """Update status bar usage from UsageMonitor."""
+        self._status_bar.update_usage(
+            data.get("ctx", 0.0),
+            data.get("5h", 0.0),
+            data.get("7d", 0.0),
+        )
+
+    def _on_theme_changed(self, colors: dict) -> None:
+        """Re-apply theme to all terminal widgets when theme changes."""
+        # Update the global COLORS dict so terminal widgets pick up new values
+        from src.theme.tokens import COLORS
+        COLORS.update(colors)
+        # Trigger repaint on all terminal widgets
+        for tw in self._terminal_widgets.values():
+            tw.update()
+
+    # ------------------------------------------------------------------ #
+    #  Lifecycle                                                           #
+    # ------------------------------------------------------------------ #
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """Clean up all resources on window close."""
+        self._pty_manager.kill_all()
+        self._usage_monitor.stop()
+        self._session_watcher.stop()
+        super().closeEvent(event)

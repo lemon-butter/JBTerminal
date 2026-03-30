@@ -1,43 +1,22 @@
-"""Tests for Team D — Status & Features modules."""
+"""Tests for Team D — Status & Features modules (non-GUI subset).
+
+GUI widget tests require a running QApplication and are in
+``test_status_features_gui.py``.  This file contains only tests that
+do not need a display or QApplication.
+"""
 
 from __future__ import annotations
 
 import json
-import os
-import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
-from src.models.enums import PaneState
 from src.settings.config import Config
 
 
 # --------------------------------------------------------------------------
-# Helper: check if we can create a QApplication
-# --------------------------------------------------------------------------
-
-def _can_create_qapp() -> bool:
-    """Return True if a QApplication can be created in this environment."""
-    try:
-        from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app is not None:
-            return True
-        # Try creating one — may abort on headless macOS
-        app = QApplication([])
-        return True
-    except Exception:
-        return False
-
-
-_HAS_QAPP = _can_create_qapp()
-needs_gui = pytest.mark.skipif(not _HAS_QAPP, reason="No display / QApplication not available")
-
-
-# --------------------------------------------------------------------------
-# Config (no GUI needed)
+# Config
 # --------------------------------------------------------------------------
 
 
@@ -70,20 +49,33 @@ class TestConfig:
         ws_id = cfg.add_workspace("test", "/tmp/test")
         assert len(cfg.get_workspaces()) == 1
         assert cfg.get_workspaces()[0]["id"] == ws_id
-        cfg.remove_workspace(ws_id)
+        assert cfg.remove_workspace(ws_id) is True
         assert len(cfg.get_workspaces()) == 0
+        assert cfg.remove_workspace("nonexistent") is False
 
-    def test_notifications(self, tmp_path: Path):
+    def test_notifications_global(self, tmp_path: Path):
         cfg = Config(tmp_path / "cfg.json")
         cfg.load()
         assert cfg.get_notifications_enabled() is True
         cfg.set_notifications_enabled(False)
         assert cfg.get_notifications_enabled() is False
 
+    def test_notifications_per_workspace(self, tmp_path: Path):
+        cfg = Config(tmp_path / "cfg.json")
+        cfg.load()
         ws_id = cfg.add_workspace("ws", "/tmp/ws")
         cfg.set_notifications_enabled(True, ws_id)
-        # Global is off, but workspace override is on
+        # Global is True (default), workspace override also True
         assert cfg.get_notifications_enabled(ws_id) is True
+
+        # Turn off globally
+        cfg.set_notifications_enabled(False)
+        # Workspace override should still be True
+        assert cfg.get_notifications_enabled(ws_id) is True
+
+        # Turn off workspace specifically
+        cfg.set_notifications_enabled(False, ws_id)
+        assert cfg.get_notifications_enabled(ws_id) is False
 
     def test_remove_workspace_cleans_notifications(self, tmp_path: Path):
         cfg = Config(tmp_path / "cfg.json")
@@ -101,103 +93,98 @@ class TestConfig:
         cfg.load()  # should not raise
         assert cfg.get_theme() == "Neon Dark"
 
+    def test_save_creates_dirs(self, tmp_path: Path):
+        path = tmp_path / "sub" / "deep" / "cfg.json"
+        cfg = Config(path)
+        cfg.load()
+        cfg.set_theme("Custom")
+        cfg.save()
+        assert path.exists()
 
-# --------------------------------------------------------------------------
-# StateDetector (pure logic, needs QObject but no widgets)
-# --------------------------------------------------------------------------
-
-
-class TestStateDetector:
-    @needs_gui
-    def test_idle_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"user@host ~ $ ")
-        assert len(states) == 1
-        assert states[0] == ("p1", PaneState.IDLE.value)
-
-    @needs_gui
-    def test_thinking_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"Thinking...")
-        assert len(states) == 1
-        assert states[0] == ("p1", PaneState.THINKING.value)
-
-    @needs_gui
-    def test_tool_use_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"Reading: /some/file.py")
-        assert states[-1][1] == PaneState.TOOL_USE.value
-
-    @needs_gui
-    def test_error_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"Error: something went wrong")
-        assert states[-1][1] == PaneState.ERROR.value
-
-    @needs_gui
-    def test_done_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", "\u2713 Done".encode("utf-8"))
-        assert states[-1][1] == PaneState.DONE.value
-
-    @needs_gui
-    def test_waiting_detection(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"Do you want to proceed? [Y/n] ")
-        assert states[-1][1] == PaneState.WAITING.value
-
-    @needs_gui
-    def test_debounce_same_state(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        states = []
-        det.state_changed.connect(lambda pid, s: states.append((pid, s)))
-        det.feed("p1", b"$ ")
-        det.feed("p1", b"$ ")  # same state, within debounce
-        assert len(states) == 1
-
-    @needs_gui
-    def test_get_state(self, qapp):
-        from src.status.state_detector import StateDetector
-        det = StateDetector()
-        assert det.get_state("missing") == PaneState.IDLE.value
-        det.feed("p1", b"Error: fail")
-        assert det.get_state("p1") == PaneState.ERROR.value
+    def test_get_with_default(self, tmp_path: Path):
+        cfg = Config(tmp_path / "cfg.json")
+        cfg.load()
+        assert cfg.get("nonexistent_key", "fallback") == "fallback"
+        cfg.set("custom_key", 42)
+        assert cfg.get("custom_key") == 42
 
 
 # --------------------------------------------------------------------------
-# SessionWatcher
+# StateDetector — logic-only tests (no signal emission)
 # --------------------------------------------------------------------------
 
 
-class TestSessionWatcher:
-    @needs_gui
-    def test_parse_tail(self, qapp, tmp_path: Path):
+class TestStateDetectorLogic:
+    """Test the _detect method directly without needing QApplication."""
+
+    def _make_detector(self):
+        # Import at test time to avoid module-level QApplication issues
+        # We need to ensure QApplication exists before creating QObject
+        # So we skip these if import fails
+        pytest.importorskip("PyQt6.QtWidgets")
+        # Just test the static _detect patterns
+        from src.status.state_detector import StateDetector
+        return StateDetector.__new__(StateDetector)
+
+    def test_detect_idle(self):
+        det = self._make_detector()
+        assert det._detect("user@host ~ $ ") == "idle"
+
+    def test_detect_thinking(self):
+        det = self._make_detector()
+        assert det._detect("Thinking...") == "thinking"
+
+    def test_detect_tool_use(self):
+        det = self._make_detector()
+        assert det._detect("Reading: /some/file.py") == "tool_use"
+
+    def test_detect_error(self):
+        det = self._make_detector()
+        assert det._detect("Error: something failed") == "error"
+
+    def test_detect_done(self):
+        det = self._make_detector()
+        assert det._detect("\u2713 Task completed") == "done"
+
+    def test_detect_waiting(self):
+        det = self._make_detector()
+        assert det._detect("Do you want to proceed? [Y/n] ") == "waiting"
+
+    def test_detect_no_match(self):
+        det = self._make_detector()
+        assert det._detect("random text with no patterns") is None
+
+
+# --------------------------------------------------------------------------
+# SessionWatcher — parse_tail logic (no QFileSystemWatcher needed)
+# --------------------------------------------------------------------------
+
+
+class TestSessionWatcherParseTail:
+    def test_parse_valid_jsonl(self, tmp_path: Path):
         from src.status.session_watcher import SessionWatcher
-        watcher = SessionWatcher(projects_dir=tmp_path)
+        # Create instance without starting watcher
+        watcher = SessionWatcher.__new__(SessionWatcher)
+
         jsonl = tmp_path / "session.jsonl"
         lines = [
-            json.dumps({"type": "assistant", "message": {"usage": {"input_tokens": 100, "output_tokens": 50}}}),
-            json.dumps({"type": "tool_result", "message": {"content": [{"type": "tool_use", "name": "Bash"}]}}),
-            json.dumps({"type": "error", "error": {"message": "rate limited"}}),
+            json.dumps({
+                "type": "assistant",
+                "message": {
+                    "usage": {"input_tokens": 100, "output_tokens": 50},
+                    "content": []
+                }
+            }),
+            json.dumps({
+                "type": "tool_result",
+                "message": {
+                    "content": [{"type": "tool_use", "name": "Bash"}]
+                }
+            }),
+            json.dumps({
+                "type": "error",
+                "error": {"message": "rate limited"}
+            }),
             "NOT VALID JSON",
         ]
         jsonl.write_text("\n".join(lines) + "\n")
@@ -210,172 +197,19 @@ class TestSessionWatcher:
         assert len(result["errors"]) == 1
         assert result["last_type"] == "error"
 
+    def test_parse_missing_file(self, tmp_path: Path):
+        from src.status.session_watcher import SessionWatcher
+        watcher = SessionWatcher.__new__(SessionWatcher)
+        result = watcher._parse_tail(str(tmp_path / "nonexistent.jsonl"))
+        assert result is None
 
-# --------------------------------------------------------------------------
-# StatusBar
-# --------------------------------------------------------------------------
-
-
-class TestStatusBar:
-    @needs_gui
-    def test_creation(self, qapp):
-        from src.status.status_bar import StatusBar
-        bar = StatusBar()
-        assert bar.objectName() == "status_bar"
-        assert bar.fixedHeight() == 28 or bar.maximumHeight() == 28
-
-    @needs_gui
-    def test_update_usage(self, qapp):
-        from src.status.status_bar import StatusBar
-        bar = StatusBar()
-        bar.update_usage(0.5, 0.75, 0.1)
-        assert bar._ctx_bar._value == 0.5
-        assert bar._fh_bar._value == 0.75
-        assert bar._sd_bar._value == 0.1
-
-    @needs_gui
-    def test_update_task_duration(self, qapp):
-        from src.status.status_bar import StatusBar
-        bar = StatusBar()
-        bar.update_task_duration(65)
-        assert bar._duration_label.text() == "01:05"
-        bar.update_task_duration(3661)
-        assert bar._duration_label.text() == "1:01:01"
-
-    @needs_gui
-    def test_settings_signal(self, qapp):
-        from src.status.status_bar import StatusBar
-        bar = StatusBar()
-        signals = []
-        bar.settings_clicked.connect(lambda: signals.append(True))
-        bar._settings_btn.click()
-        assert len(signals) == 1
-
-
-# --------------------------------------------------------------------------
-# UsageMonitor
-# --------------------------------------------------------------------------
-
-
-class TestUsageMonitor:
-    @needs_gui
-    def test_creation(self, qapp):
-        from src.status.usage_monitor import UsageMonitor
-        mon = UsageMonitor()
-        assert hasattr(mon, "usage_updated")
-
-
-# --------------------------------------------------------------------------
-# Notifier
-# --------------------------------------------------------------------------
-
-
-class TestNotifier:
-    @needs_gui
-    def test_creation(self, qapp):
-        from src.notifications.notifier import Notifier
-        n = Notifier()
-        assert isinstance(n, Notifier)
-
-    @needs_gui
-    def test_osascript_fallback(self, qapp, monkeypatch):
-        from src.notifications.notifier import Notifier
-        import subprocess
-        n = Notifier()
-        n._use_pyobjc = False
-        calls = []
-        monkeypatch.setattr(
-            subprocess, "Popen",
-            lambda *a, **kw: calls.append(a)
-        )
-        n.notify("Test", "Body", sound=False)
-        assert len(calls) == 1
-
-
-# --------------------------------------------------------------------------
-# FontPicker
-# --------------------------------------------------------------------------
-
-
-class TestFontPicker:
-    @needs_gui
-    def test_creation(self, qapp):
-        from src.settings.font_picker import FontPicker
-        fp = FontPicker()
-        family, size = fp.get_font()
-        assert isinstance(family, str)
-        assert isinstance(size, int)
-
-    @needs_gui
-    def test_set_font(self, qapp):
-        from src.settings.font_picker import FontPicker
-        fp = FontPicker()
-        fp.set_font("Menlo", 18)
-        _, size = fp.get_font()
-        assert size == 18
-
-    @needs_gui
-    def test_signal(self, qapp):
-        from src.settings.font_picker import FontPicker
-        fp = FontPicker()
-        received = []
-        fp.font_changed.connect(lambda f, s: received.append((f, s)))
-        fp._size_spin.setValue(20)
-        assert len(received) >= 1
-        assert received[-1][1] == 20
-
-
-# --------------------------------------------------------------------------
-# ThemePicker
-# --------------------------------------------------------------------------
-
-
-class TestThemePicker:
-    @needs_gui
-    def test_creation(self, qapp):
-        from src.settings.theme_picker import ThemePicker
-        tp = ThemePicker()
-        assert tp._list.count() >= 2
-
-    @needs_gui
-    def test_set_theme(self, qapp):
-        from src.settings.theme_picker import ThemePicker
-        tp = ThemePicker()
-        tp.set_theme("Neon Dark")
-        assert tp.get_theme() == "Neon Dark"
-
-    @needs_gui
-    def test_signal(self, qapp):
-        from src.settings.theme_picker import ThemePicker
-        tp = ThemePicker()
-        received = []
-        tp.theme_selected.connect(lambda n: received.append(n))
-        tp.set_theme("Dracula")
-        assert "Dracula" in received
-
-
-# --------------------------------------------------------------------------
-# SettingsDialog
-# --------------------------------------------------------------------------
-
-
-class TestSettingsDialog:
-    @needs_gui
-    def test_creation(self, qapp, tmp_path: Path):
-        from src.settings.settings_dialog import SettingsDialog
-        cfg = Config(tmp_path / "cfg.json")
-        cfg.load()
-        dlg = SettingsDialog(config=cfg)
-        assert dlg.objectName() == "settings_dialog"
-
-    @needs_gui
-    def test_apply(self, qapp, tmp_path: Path):
-        from src.settings.settings_dialog import SettingsDialog
-        cfg_path = tmp_path / "cfg.json"
-        cfg = Config(cfg_path)
-        cfg.load()
-        dlg = SettingsDialog(config=cfg)
-        dlg._theme_picker.set_theme("Dracula")
-        dlg._apply()
-        assert cfg.get_theme() == "Dracula"
-        assert cfg_path.exists()
+    def test_read_tail(self):
+        from src.status.session_watcher import SessionWatcher
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            for i in range(100):
+                f.write(f"line {i}\n")
+            f.flush()
+            lines = SessionWatcher._read_tail(f.name, 10)
+            assert len(lines) == 10
+            assert "line 90\n" in lines
