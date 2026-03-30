@@ -501,7 +501,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _restore_layout_or_default(self) -> None:
-        """Restore saved layout from config, or create a default tab."""
+        """Restore saved layout from config, or create a default tab with PTY."""
         layouts = self._config.load_layout()
         if layouts:
             # Restore workspaces into sidebar
@@ -512,9 +512,21 @@ class MainWindow(QMainWindow):
             if layouts:
                 first_ws = self._config.restore_workspace_from_layout(layouts[0])
                 self.set_workspace(first_ws)
+                # Spawn PTYs for all visible panes
+                if first_ws.active_tab:
+                    for leaf in get_all_leaves(first_ws.active_tab.pane_root):
+                        self.pane_created.emit(leaf.id, first_ws.path)
         else:
-            # No saved layout — start with a single default tab
+            # No saved layout — start with a default workspace + terminal
+            from src.models.pane_tree import PaneLeaf
+            default_ws = Workspace(name="Home", path=os.path.expanduser("~"))
+            self._workspace = default_ws
             self._tab_bar.add_tab("Terminal")
+            root = self._split_pane.root
+            # Spawn PTY for the initial pane
+            leaves = get_all_leaves(root)
+            if leaves:
+                self.pane_created.emit(leaves[0].id, default_ws.path)
 
     def _save_layout(self) -> None:
         """Save current workspace layouts to config."""

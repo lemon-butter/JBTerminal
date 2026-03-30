@@ -171,6 +171,17 @@ QPushButton:focus {
     border: 2px solid @accent_strong;
 }
 
+/* Small icon buttons (sidebar +, pane header split/close, tab close) */
+QPushButton[flat="true"],
+QWidget#pane_header QPushButton,
+QWidget#sidebar QPushButton {
+    padding: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
 /* === Input === */
 QLineEdit {
     background-color: @bg_secondary;

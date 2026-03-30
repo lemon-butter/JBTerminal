@@ -294,7 +294,7 @@ class TerminalWidget(QWidget):
         # ---- pyte backend ----
         self._cols = 80
         self._rows = 24
-        self._screen = pyte.Screen(self._cols, self._rows)
+        self._screen = pyte.HistoryScreen(self._cols, self._rows, history=self._config.scrollback_lines)
         self._screen.set_mode(pyte.modes.LNM)  # auto line-feed on CR
         self._stream = pyte.Stream(self._screen)
 
