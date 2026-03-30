@@ -50,6 +50,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
         self.resize(1200, 800)
 
+        # macOS: transparent title bar blending with app background
+        self._setup_macos_titlebar()
+
         # Current workspace
         self._workspace: Workspace | None = None
 
@@ -205,6 +208,45 @@ class MainWindow(QMainWindow):
                 self._tab_bar.add_tab(workspace.tabs[i].name)
 
             self._tab_bar.select_tab(workspace.active_tab_index)
+
+    def _setup_macos_titlebar(self) -> None:
+        """Make the title bar transparent and dark on macOS."""
+        import sys
+        if sys.platform != "darwin":
+            return
+        try:
+            from AppKit import NSApp, NSColor, NSWindowTitleHidden
+            window = NSApp.windows()[-1] if NSApp.windows() else None
+            if window is None:
+                # Defer — window not yet realized
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, self._apply_macos_titlebar)
+                return
+            self._apply_macos_titlebar_to(window)
+        except ImportError:
+            # pyobjc not available, try via Qt
+            pass
+
+    def _apply_macos_titlebar(self) -> None:
+        try:
+            from AppKit import NSApp
+            for window in NSApp.windows():
+                self._apply_macos_titlebar_to(window)
+        except Exception:
+            pass
+
+    def _apply_macos_titlebar_to(self, ns_window: object) -> None:
+        try:
+            from AppKit import NSColor, NSWindowTitleHidden
+            ns_window.setTitlebarAppearsTransparent_(True)
+            ns_window.setTitleVisibility_(NSWindowTitleHidden)
+            # Match app background color
+            bg = NSColor.colorWithRed_green_blue_alpha_(
+                0x0a / 255, 0x0a / 255, 0x1a / 255, 1.0
+            )
+            ns_window.setBackgroundColor_(bg)
+        except Exception:
+            pass
 
     def _setup_shortcuts(self) -> None:
         """Register keyboard shortcuts."""

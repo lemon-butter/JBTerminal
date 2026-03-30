@@ -180,7 +180,10 @@ class Sidebar(QWidget):
                 break
 
     def _on_add_workspace(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Workspace Folder")
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Workspace Folder", "",
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
+        )
         if path:
             import os
             name = os.path.basename(path)
