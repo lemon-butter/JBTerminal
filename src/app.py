@@ -7,6 +7,9 @@ from PyQt6.QtWidgets import QApplication
 from src.theme.theme_manager import ThemeManager
 from src.theme.presets.default_dark import PRESET as DARK_PRESET
 from src.theme.presets.default_light import PRESET as LIGHT_PRESET
+from src.theme.presets.dracula import PRESET as DRACULA_PRESET
+from src.theme.presets.nord import PRESET as NORD_PRESET
+from src.theme.presets.tokyo_night import PRESET as TOKYO_NIGHT_PRESET
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
@@ -19,6 +22,9 @@ def create_app(argv: list[str] | None = None) -> QApplication:
     theme_manager = ThemeManager()
     theme_manager.load_preset(DARK_PRESET["name"], DARK_PRESET["colors"])
     theme_manager.load_preset(LIGHT_PRESET["name"], LIGHT_PRESET["colors"])
+    theme_manager.load_preset(DRACULA_PRESET["name"], DRACULA_PRESET["colors"])
+    theme_manager.load_preset(NORD_PRESET["name"], NORD_PRESET["colors"])
+    theme_manager.load_preset(TOKYO_NIGHT_PRESET["name"], TOKYO_NIGHT_PRESET["colors"])
     theme_manager.set_active(DARK_PRESET["name"])
     theme_manager.apply_theme(app)
 

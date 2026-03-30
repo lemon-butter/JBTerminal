@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -20,11 +21,14 @@ class PaneView(QWidget):
     split_requested = pyqtSignal(str, str)  # (pane_id, direction)
     close_requested = pyqtSignal(str)       # (pane_id)
     focused = pyqtSignal(str)               # (pane_id)
+    tab_dropped = pyqtSignal(str, int)      # (pane_id, tab_index) — tab dragged onto this pane
 
     def __init__(self, pane_id: str, name: str = "Terminal", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.pane_id = pane_id
         self.setObjectName("pane_view")
+        self.setAcceptDrops(True)
+        self._drop_highlight = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -96,6 +100,57 @@ class PaneView(QWidget):
     def set_close_visible(self, visible: bool) -> None:
         """Show or hide the close button (hide when it's the only pane)."""
         self._close_btn.setVisible(visible)
+
+    # --- Drag-and-drop: accept tab drops ---
+
+    def dragEnterEvent(self, event: object) -> None:
+        from src.ui.tab_bar import TerminalTabBar
+        if event.mimeData().hasFormat(TerminalTabBar.TAB_MIME_TYPE):
+            self._drop_highlight = True
+            self.update()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event: object) -> None:
+        self._drop_highlight = False
+        self.update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event: object) -> None:
+        from src.ui.tab_bar import TerminalTabBar
+        self._drop_highlight = False
+        self.update()
+        if event.mimeData().hasFormat(TerminalTabBar.TAB_MIME_TYPE):
+            tab_index_bytes = event.mimeData().data(TerminalTabBar.TAB_MIME_TYPE).data()
+            try:
+                tab_index = int(tab_index_bytes.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                event.ignore()
+                return
+            self.tab_dropped.emit(self.pane_id, tab_index)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def paintEvent(self, event: object) -> None:
+        """Draw highlight border when a tab is being dragged over this pane."""
+        super().paintEvent(event)
+        if self._drop_highlight:
+            painter = QPainter(self)
+            color = QColor("#00FFCC")
+            color.setAlpha(80)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(color)
+            painter.drawRect(self.rect())
+            # Draw a border
+            border = QColor("#00FFCC")
+            border.setAlpha(180)
+            from PyQt6.QtGui import QPen
+            painter.setPen(QPen(border, 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self.rect().adjusted(1, 1, -1, -1))
+            painter.end()
 
     def mousePressEvent(self, event: object) -> None:
         """Emit focused signal when pane is clicked."""

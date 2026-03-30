@@ -24,6 +24,7 @@ class SplitPaneContainer(QWidget):
     pane_split_requested = pyqtSignal(str, str)  # (pane_id, direction)
     pane_close_requested = pyqtSignal(str)        # (pane_id)
     pane_focused = pyqtSignal(str)                # (pane_id)
+    tab_dropped_on_pane = pyqtSignal(str, int)    # (pane_id, tab_index)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -152,6 +153,7 @@ class SplitPaneContainer(QWidget):
             pane_view.split_requested.connect(self._on_split_requested)
             pane_view.close_requested.connect(self._on_close_requested)
             pane_view.focused.connect(self._on_pane_focused)
+            pane_view.tab_dropped.connect(self._on_tab_dropped)
             self._pane_views[node.id] = pane_view
             return pane_view
 
@@ -182,3 +184,7 @@ class SplitPaneContainer(QWidget):
         """Handle pane focus from PaneView."""
         self._active_pane_id = pane_id
         self.pane_focused.emit(pane_id)
+
+    def _on_tab_dropped(self, pane_id: str, tab_index: int) -> None:
+        """Handle tab dropped onto a pane — forward to MainWindow."""
+        self.tab_dropped_on_pane.emit(pane_id, tab_index)

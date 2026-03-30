@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 from src.models.enums import PaneState, SplitDirection
 from src.models.workspace import Workspace, WorkspaceTab
 from src.models.pane_tree import get_all_leaves
+from src.notifications.hooks_handler import HooksHandler
+from src.notifications.notifier import Notifier
 from src.settings.config import Config
 from src.settings.settings_dialog import SettingsDialog
 from src.status.session_watcher import SessionWatcher
@@ -26,6 +28,7 @@ from src.status.state_detector import StateDetector
 from src.status.status_bar import StatusBar
 from src.status.usage_monitor import UsageMonitor
 from src.terminal.pty_manager import PtyManager
+from src.terminal.terminal_config import TerminalConfig
 from src.terminal.terminal_widget import TerminalWidget
 from src.ui.sidebar import Sidebar
 from src.ui.split_pane import SplitPaneContainer
@@ -57,6 +60,15 @@ class MainWindow(QMainWindow):
         # --- State Detector ---
         self._state_detector = StateDetector(self)
 
+        # --- Notifier ---
+        self._notifier = Notifier(self)
+        self._notifier.show_requested.connect(self._bring_to_front)
+
+        # --- Hooks Handler ---
+        self._hooks_handler = HooksHandler(self)
+        self._hooks_handler.connect_notifier(self._notifier)
+        self._hooks_handler.connect_state_detector(self._state_detector)
+
         # --- Usage Monitor ---
         self._usage_monitor = UsageMonitor(self)
 
@@ -66,6 +78,9 @@ class MainWindow(QMainWindow):
         # --- Config ---
         self._config = Config()
         self._config.load()
+
+        # Wire hooks handler to config
+        self._hooks_handler.connect_config(self._config)
 
         # --- Central widget ---
         central = QWidget()
@@ -117,6 +132,7 @@ class MainWindow(QMainWindow):
         self._split_pane.pane_split_requested.connect(self._on_pane_split_requested)
         self._split_pane.pane_close_requested.connect(self._on_pane_close_requested)
         self._split_pane.pane_focused.connect(self._on_pane_focused)
+        self._split_pane.tab_dropped_on_pane.connect(self._on_tab_dropped_on_pane)
 
         # --- Signal connections (PTY integration) ---
         self._pty_manager.pty_output.connect(self._on_pty_output)
@@ -144,8 +160,8 @@ class MainWindow(QMainWindow):
         # --- Keyboard shortcuts ---
         self._setup_shortcuts()
 
-        # --- Initialize with a default tab ---
-        self._tab_bar.add_tab("Terminal")
+        # --- Restore layout or initialize default ---
+        self._restore_layout_or_default()
 
     @property
     def sidebar(self) -> Sidebar:
@@ -166,6 +182,7 @@ class MainWindow(QMainWindow):
     def set_workspace(self, workspace: Workspace) -> None:
         """Switch to a workspace, restoring its tabs and pane layout."""
         self._workspace = workspace
+        self._hooks_handler.set_workspace_id(workspace.id)
 
         # Clear existing tabs from tab bar
         while self._tab_bar.tab_count > 0:
@@ -226,6 +243,9 @@ class MainWindow(QMainWindow):
 
     def _on_open_settings(self) -> None:
         dialog = SettingsDialog(config=self._config, parent=self)
+        dialog.font_applied.connect(self._on_font_applied)
+        dialog.theme_applied.connect(self._on_theme_applied)
+        dialog.terminal_applied.connect(self._on_terminal_applied)
         dialog.exec()
 
     # --- Signal handlers ---
@@ -298,6 +318,62 @@ class MainWindow(QMainWindow):
             if active:
                 active.active_pane_id = pane_id
         self.pane_focused.emit(pane_id)
+
+    def _on_tab_dropped_on_pane(self, pane_id: str, tab_index: int) -> None:
+        """Handle a tab being dragged and dropped onto a split pane.
+
+        This moves the terminal from the dragged tab into the target pane,
+        replacing whatever was there before. The source tab is then closed.
+        """
+        if not self._workspace:
+            return
+        if tab_index < 0 or tab_index >= len(self._workspace.tabs):
+            return
+        # Don't allow dropping the only tab
+        if len(self._workspace.tabs) <= 1:
+            return
+        # Don't drop onto a pane that belongs to the same tab being dragged
+        source_tab = self._workspace.tabs[tab_index]
+        source_leaves = get_all_leaves(source_tab.pane_root)
+        if pane_id in [lf.id for lf in source_leaves]:
+            return
+
+        # Get terminal widgets from source tab's panes
+        source_pane_ids = [lf.id for lf in source_leaves]
+        # Move the first terminal widget from source tab into target pane
+        if source_pane_ids:
+            first_source_id = source_pane_ids[0]
+            tw = self._terminal_widgets.get(first_source_id)
+            if tw is not None:
+                # Re-map the terminal widget to the target pane
+                self._terminal_widgets.pop(first_source_id, None)
+                self._terminal_widgets[pane_id] = tw
+                # Place in target pane view
+                target_view = self._split_pane.get_pane_view(pane_id)
+                if target_view is not None:
+                    target_view.set_widget(tw)
+                # Update PTY mapping — rewrite to target pane_id
+                tw.input_ready.disconnect()
+                tw.size_changed.disconnect()
+                tw.input_ready.connect(
+                    lambda data, pid=pane_id: self._pty_manager.write(pid, data)
+                )
+                tw.size_changed.connect(
+                    lambda cols, rows, pid=pane_id: self._pty_manager.resize(pid, cols, rows)
+                )
+                # Remap PTY process from old pane_id to new
+                self._pty_manager.remap(first_source_id, pane_id)
+
+        # Close remaining source panes' PTY processes
+        for sid in source_pane_ids[1:]:
+            self._pty_manager.kill(sid)
+            stw = self._terminal_widgets.pop(sid, None)
+            if stw is not None:
+                stw.deleteLater()
+
+        # Remove the source tab from workspace model and tab bar
+        self._workspace.remove_tab(tab_index)
+        self._tab_bar.close_tab(tab_index)
 
     # ------------------------------------------------------------------ #
     #  PTY Integration                                                     #
@@ -372,11 +448,90 @@ class MainWindow(QMainWindow):
             tw.update()
 
     # ------------------------------------------------------------------ #
+    #  Settings handlers                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _on_font_applied(self, family: str, size: int) -> None:
+        """Update all terminal widgets when font changes."""
+        for tw in self._terminal_widgets.values():
+            cfg = TerminalConfig(
+                font_family=family,
+                font_size=size,
+                line_spacing=tw._config.line_spacing,
+                scrollback_lines=tw._config.scrollback_lines,
+                cursor_blink=tw._config.cursor_blink,
+            )
+            tw.set_config(cfg)
+
+    def _on_theme_applied(self, theme_name: str) -> None:
+        """Switch the active theme and reapply QSS."""
+        app = QApplication.instance()
+        if app is not None:
+            tm = app.property("theme_manager")
+            if tm is not None:
+                try:
+                    tm.set_active(theme_name)
+                    tm.apply_theme(app)
+                except KeyError:
+                    pass
+
+    def _on_terminal_applied(
+        self, line_spacing: float, scrollback: int, cursor_blink: bool
+    ) -> None:
+        """Update all terminal widgets when terminal settings change."""
+        for tw in self._terminal_widgets.values():
+            cfg = TerminalConfig(
+                font_family=tw._config.font_family,
+                font_size=tw._config.font_size,
+                line_spacing=line_spacing,
+                scrollback_lines=scrollback,
+                cursor_blink=cursor_blink,
+            )
+            tw.set_config(cfg)
+
+    def _bring_to_front(self) -> None:
+        """Bring the main window to the front (notification action)."""
+        self.raise_()
+        self.activateWindow()
+        self.showNormal()
+
+    # ------------------------------------------------------------------ #
+    #  Layout save/restore                                                 #
+    # ------------------------------------------------------------------ #
+
+    def _restore_layout_or_default(self) -> None:
+        """Restore saved layout from config, or create a default tab."""
+        layouts = self._config.load_layout()
+        if layouts:
+            # Restore workspaces into sidebar
+            for ws_data in layouts:
+                workspace = self._config.restore_workspace_from_layout(ws_data)
+                self._sidebar.add_workspace(workspace)
+            # Select the first workspace
+            if layouts:
+                first_ws = self._config.restore_workspace_from_layout(layouts[0])
+                self.set_workspace(first_ws)
+        else:
+            # No saved layout — start with a single default tab
+            self._tab_bar.add_tab("Terminal")
+
+    def _save_layout(self) -> None:
+        """Save current workspace layouts to config."""
+        all_layouts = []
+        for ws in self._sidebar._workspaces:
+            self._config.save_workspace_layout(ws)
+        # Collect all saved layouts
+        all_layouts = self._config.load_layout()
+        self._config.save_layout(all_layouts)
+        self._config.save()
+
+    # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
     # ------------------------------------------------------------------ #
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        """Clean up all resources on window close."""
+        """Save layout and clean up all resources on window close."""
+        self._save_layout()
         self._pty_manager.kill_all()
         self._usage_monitor.stop()
         self._session_watcher.stop()

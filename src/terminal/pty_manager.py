@@ -211,6 +211,25 @@ class PtyManager(QObject):
         """Check if a process exists for the given pane."""
         return pane_id in self._processes
 
+    def remap(self, old_pane_id: str, new_pane_id: str) -> bool:
+        """Re-key a PTY process from *old_pane_id* to *new_pane_id*.
+
+        This is used when a terminal is moved between panes (e.g. via
+        tab-to-pane drag-and-drop). The underlying PTY process and reader
+        thread remain the same; only the lookup key changes.
+
+        Returns True if the remap succeeded, False otherwise.
+        """
+        proc = self._processes.pop(old_pane_id, None)
+        if proc is None:
+            return False
+        proc.pane_id = new_pane_id
+        # Update the reader thread's pane_id so it emits signals with the new id
+        if proc.reader_thread is not None:
+            proc.reader_thread._pane_id = new_pane_id
+        self._processes[new_pane_id] = proc
+        return True
+
     def _cleanup_process(self, proc: PtyProcess) -> None:
         """Stop reader thread, close fd, kill child."""
         # Stop reader thread

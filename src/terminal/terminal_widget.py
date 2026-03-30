@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import pyte
 from PyQt6.QtCore import (
     QRect,
+    QRectF,
     QSize,
     Qt,
     QTimer,
@@ -29,10 +30,17 @@ from PyQt6.QtGui import (
     QWheelEvent,
     QInputMethodEvent,
 )
-from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QScrollBar,
+    QWidget,
+)
 
 from src.terminal.terminal_config import TerminalConfig
-from src.theme.tokens import COLORS
+from src.theme.tokens import COLORS, get_color
 
 
 # ---- ANSI color mapping: pyte color name -> theme token key ----
@@ -149,6 +157,117 @@ _QT_KEY_TO_VT100: Dict[int, bytes] = {
 }
 
 
+class _SearchBar(QWidget):
+    """Overlay search bar for terminal find (Cmd+F)."""
+
+    search_changed = pyqtSignal(str)   # emitted when search text changes
+    next_match = pyqtSignal()
+    prev_match = pyqtSignal()
+    closed = pyqtSignal()
+
+    def __init__(self, parent: QWidget = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("terminal_search_bar")
+        self.setFixedHeight(36)
+        self.setVisible(False)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+
+        self._input = QLineEdit(self)
+        self._input.setPlaceholderText("Search...")
+        self._input.textChanged.connect(self.search_changed.emit)
+        self._input.returnPressed.connect(self.next_match.emit)
+
+        self._label = QLabel("0/0", self)
+        self._label.setFixedWidth(60)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self._prev_btn = QPushButton("\u25B2", self)   # up arrow
+        self._prev_btn.setFixedSize(28, 28)
+        self._prev_btn.clicked.connect(self.prev_match.emit)
+
+        self._next_btn = QPushButton("\u25BC", self)   # down arrow
+        self._next_btn.setFixedSize(28, 28)
+        self._next_btn.clicked.connect(self.next_match.emit)
+
+        self._close_btn = QPushButton("\u2715", self)  # x mark
+        self._close_btn.setFixedSize(28, 28)
+        self._close_btn.clicked.connect(self.closed.emit)
+
+        layout.addWidget(self._input, 1)
+        layout.addWidget(self._label)
+        layout.addWidget(self._prev_btn)
+        layout.addWidget(self._next_btn)
+        layout.addWidget(self._close_btn)
+
+        # Style
+        accent = COLORS.get("accent", "#00FFCC")
+        bg = COLORS.get("bg_secondary", "#12122a")
+        border = COLORS.get("border_default", "#333366")
+        text = COLORS.get("text_primary", "#ffffff")
+        muted = COLORS.get("text_muted", "#8888aa")
+        self.setStyleSheet(f"""
+            #terminal_search_bar {{
+                background: {bg};
+                border-bottom: 1px solid {border};
+            }}
+            QLineEdit {{
+                background: {COLORS.get("bg_tertiary", "#1a1a3e")};
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 4px;
+                padding: 2px 6px;
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{
+                border-color: {accent};
+            }}
+            QLabel {{
+                color: {muted};
+                font-size: 12px;
+            }}
+            QPushButton {{
+                background: transparent;
+                color: {text};
+                border: 1px solid {border};
+                border-radius: 4px;
+                font-size: 12px;
+            }}
+            QPushButton:hover {{
+                background: {COLORS.get("bg_hover", "#242450")};
+                border-color: {accent};
+            }}
+        """)
+
+    def open_search(self) -> None:
+        self.setVisible(True)
+        self._input.setFocus()
+        self._input.selectAll()
+
+    def close_search(self) -> None:
+        self.setVisible(False)
+        self._input.clear()
+        if self.parent():
+            self.parent().setFocus()
+
+    def set_match_info(self, current: int, total: int) -> None:
+        if total == 0:
+            self._label.setText("0/0")
+        else:
+            self._label.setText(f"{current + 1}/{total}")
+
+    def text(self) -> str:
+        return self._input.text()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.closed.emit()
+            return
+        super().keyPressEvent(event)
+
+
 class TerminalWidget(QWidget):
     """Terminal emulator widget using pyte backend.
 
@@ -199,6 +318,16 @@ class TerminalWidget(QWidget):
         self._selection_start: Optional[Tuple[int, int]] = None  # (col, row_in_buffer)
         self._selection_end: Optional[Tuple[int, int]] = None
         self._selecting = False
+        self._click_count = 0
+        self._last_click_pos: Optional[Tuple[int, int]] = None
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(400)  # multi-click timeout
+        self._click_timer.timeout.connect(self._reset_click_count)
+
+        # ---- Search ----
+        self._search_matches: List[Tuple[int, int, int]] = []  # (row, col_start, col_end)
+        self._search_current_idx = -1
 
         # ---- IME composition ----
         self._composing_text = ""
@@ -208,6 +337,37 @@ class TerminalWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_InputMethodEnabled, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setMinimumSize(200, 100)
+
+        # ---- Search bar overlay ----
+        self._search_bar = _SearchBar(self)
+        self._search_bar.search_changed.connect(self._on_search_changed)
+        self._search_bar.next_match.connect(self._on_search_next)
+        self._search_bar.prev_match.connect(self._on_search_prev)
+        self._search_bar.closed.connect(self._on_search_close)
+
+        # ---- Scrollbar indicator ----
+        self._scrollbar = QScrollBar(Qt.Orientation.Vertical, self)
+        self._scrollbar.setFixedWidth(8)
+        self._scrollbar.setStyleSheet(f"""
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 8px;
+                margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {COLORS.get("accent_medium", "rgba(0, 255, 204, 0.25)")};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: transparent;
+            }}
+        """)
+        self._scrollbar.valueChanged.connect(self._on_scrollbar_changed)
+        self._scrollbar_updating = False  # guard against recursive updates
 
         # Force initial metrics calculation
         self._recalc_metrics()
@@ -231,12 +391,16 @@ class TerminalWidget(QWidget):
         # Auto-scroll to bottom on new output
         if self._scroll_offset > 0:
             self._scroll_offset = 0
+        self._update_scrollbar()
         self.update()
 
     def set_config(self, config: TerminalConfig) -> None:
         """Apply new configuration."""
         self._config = config
         self._scrollback_max = config.scrollback_lines
+        # Trim scrollback if new limit is smaller
+        while len(self._scrollback) > self._scrollback_max:
+            self._scrollback.pop(0)
         self._apply_font_config()
         if config.cursor_blink:
             self._blink_timer.start(530)
@@ -244,6 +408,7 @@ class TerminalWidget(QWidget):
             self._blink_timer.stop()
             self._cursor_visible = True
         self._recalc_metrics()
+        self._update_scrollbar()
         self.update()
 
     def get_selected_text(self) -> str:
@@ -308,6 +473,185 @@ class TerminalWidget(QWidget):
         self._cursor_visible = not self._cursor_visible
         self.update()
 
+    def _reset_click_count(self) -> None:
+        self._click_count = 0
+        self._last_click_pos = None
+
+    # ---- Scrollbar ----
+
+    def _update_scrollbar(self) -> None:
+        """Sync the scrollbar range/position with scrollback state."""
+        self._scrollbar_updating = True
+        total = len(self._scrollback)
+        self._scrollbar.setRange(0, total)
+        self._scrollbar.setPageStep(self._rows)
+        self._scrollbar.setValue(total - self._scroll_offset)
+        self._scrollbar.setVisible(total > 0)
+        self._scrollbar_updating = False
+
+    @pyqtSlot(int)
+    def _on_scrollbar_changed(self, value: int) -> None:
+        if self._scrollbar_updating:
+            return
+        total = len(self._scrollback)
+        self._scroll_offset = max(0, total - value)
+        self.update()
+
+    # ---- Search ----
+
+    def _get_all_lines_text(self) -> List[str]:
+        """Return all lines (scrollback + screen) as plain text strings."""
+        lines: List[str] = []
+        # Scrollback lines
+        for sb_line in self._scrollback:
+            chars: List[str] = []
+            if isinstance(sb_line, dict):
+                for col in range(self._cols):
+                    ch = sb_line.get(col, self._screen.default_char)
+                    chars.append(ch.data if hasattr(ch, 'data') else " ")
+            lines.append("".join(chars))
+        # Screen buffer lines
+        for row in range(self._rows):
+            buf_line = self._screen.buffer.get(row, {})
+            chars = []
+            for col in range(self._cols):
+                ch = buf_line.get(col, self._screen.default_char)
+                chars.append(ch.data if hasattr(ch, 'data') else " ")
+            lines.append("".join(chars))
+        return lines
+
+    def _perform_search(self, query: str) -> None:
+        """Search all lines for *query* (case-insensitive) and store matches."""
+        self._search_matches.clear()
+        self._search_current_idx = -1
+        if not query:
+            self._search_bar.set_match_info(0, 0)
+            self.update()
+            return
+
+        all_lines = self._get_all_lines_text()
+        q = query.lower()
+        for row_idx, line_text in enumerate(all_lines):
+            lower_line = line_text.lower()
+            start = 0
+            while True:
+                pos = lower_line.find(q, start)
+                if pos == -1:
+                    break
+                self._search_matches.append((row_idx, pos, pos + len(q) - 1))
+                start = pos + 1
+
+        if self._search_matches:
+            # Jump to the match nearest the bottom (most recent)
+            self._search_current_idx = len(self._search_matches) - 1
+            self._scroll_to_search_match()
+        self._search_bar.set_match_info(
+            self._search_current_idx, len(self._search_matches)
+        )
+        self.update()
+
+    def _scroll_to_search_match(self) -> None:
+        """Scroll so the current search match is visible."""
+        if self._search_current_idx < 0:
+            return
+        match_row, _, _ = self._search_matches[self._search_current_idx]
+        sb_len = len(self._scrollback)
+        if match_row < sb_len:
+            # Match is in scrollback
+            self._scroll_offset = sb_len - match_row
+        else:
+            # Match is in screen buffer
+            self._scroll_offset = 0
+        self._update_scrollbar()
+
+    def _is_search_highlight(self, global_row: int, col: int) -> Tuple[bool, bool]:
+        """Check if (global_row, col) is in a search match.
+
+        Returns (is_match, is_current_match).
+        """
+        for i, (r, cs, ce) in enumerate(self._search_matches):
+            if r == global_row and cs <= col <= ce:
+                return True, (i == self._search_current_idx)
+        return False, False
+
+    @pyqtSlot(str)
+    def _on_search_changed(self, text: str) -> None:
+        self._perform_search(text)
+
+    @pyqtSlot()
+    def _on_search_next(self) -> None:
+        if not self._search_matches:
+            return
+        self._search_current_idx = (
+            (self._search_current_idx + 1) % len(self._search_matches)
+        )
+        self._scroll_to_search_match()
+        self._search_bar.set_match_info(
+            self._search_current_idx, len(self._search_matches)
+        )
+        self.update()
+
+    @pyqtSlot()
+    def _on_search_prev(self) -> None:
+        if not self._search_matches:
+            return
+        self._search_current_idx = (
+            (self._search_current_idx - 1) % len(self._search_matches)
+        )
+        self._scroll_to_search_match()
+        self._search_bar.set_match_info(
+            self._search_current_idx, len(self._search_matches)
+        )
+        self.update()
+
+    @pyqtSlot()
+    def _on_search_close(self) -> None:
+        self._search_bar.close_search()
+        self._search_matches.clear()
+        self._search_current_idx = -1
+        self.update()
+
+    # ---- Word / line selection helpers ----
+
+    def _word_bounds_at(self, col: int, row: int) -> Tuple[int, int]:
+        """Return (start_col, end_col) of the word at (col, row)."""
+        buf_line = self._screen.buffer.get(row, {})
+        # Build line text
+        line_text = ""
+        for c in range(self._cols):
+            ch = buf_line.get(c, self._screen.default_char)
+            line_text += ch.data if hasattr(ch, 'data') else " "
+
+        if col >= len(line_text) or line_text[col] == " ":
+            return (col, col)
+
+        start = col
+        while start > 0 and line_text[start - 1] not in " \t":
+            start -= 1
+        end = col
+        while end < len(line_text) - 1 and line_text[end + 1] not in " \t":
+            end += 1
+        return (start, end)
+
+    def _select_word_at(self, col: int, row: int) -> None:
+        """Select the word at (col, row)."""
+        start, end = self._word_bounds_at(col, row)
+        self._selection_start = (start, row)
+        self._selection_end = (end, row)
+        self.update()
+
+    def _select_line_at(self, row: int) -> None:
+        """Select the entire line at *row*."""
+        self._selection_start = (0, row)
+        self._selection_end = (self._cols - 1, row)
+        self.update()
+
+    def _select_all(self) -> None:
+        """Select all visible text (screen buffer)."""
+        self._selection_start = (0, 0)
+        self._selection_end = (self._cols - 1, self._rows - 1)
+        self.update()
+
     # ------------------------------------------------------------------ #
     #  Painting                                                           #
     # ------------------------------------------------------------------ #
@@ -326,22 +670,33 @@ class TerminalWidget(QWidget):
 
         default_fg = QColor(COLORS["text_primary"])
         default_bg = bg
+        selection_bg = get_color("accent_light")
+        selection_fg = QColor(COLORS["text_primary"])
+        search_bg = QColor(COLORS.get("status_warning", "#FFCC00"))
+        search_bg.setAlpha(100)
+        search_current_bg = QColor(COLORS.get("status_warning", "#FFCC00"))
+        search_current_bg.setAlpha(200)
 
         screen = self._screen
+        sb_len = len(self._scrollback)
 
         for row_idx in range(self._rows):
-            # Determine which buffer row to draw
+            # Determine which buffer row to draw and its global index
             if self._scroll_offset > 0:
-                sb_row = len(self._scrollback) - self._scroll_offset + row_idx
-                if 0 <= sb_row < len(self._scrollback):
+                sb_row = sb_len - self._scroll_offset + row_idx
+                if 0 <= sb_row < sb_len:
                     line = self._scrollback[sb_row]
-                elif sb_row >= len(self._scrollback):
-                    buf_row = sb_row - len(self._scrollback)
+                    global_row = sb_row
+                elif sb_row >= sb_len:
+                    buf_row = sb_row - sb_len
                     line = screen.buffer.get(buf_row, {})
+                    global_row = sb_len + buf_row
                 else:
                     line = {}
+                    global_row = -1
             else:
                 line = screen.buffer.get(row_idx, {})
+                global_row = sb_len + row_idx
 
             y = row_idx * ch
 
@@ -361,14 +716,20 @@ class TerminalWidget(QWidget):
                 if hasattr(char, 'reverse') and char.reverse:
                     fg_color, bg_color = bg_color, fg_color
 
-                # Handle selection highlight
-                if self._is_selected(col_idx, row_idx):
-                    fg_color = QColor(COLORS["bg_terminal"])
-                    bg_color = QColor(COLORS["accent"])
+                # Handle selection highlight (accent_light)
+                selected = self._is_selected(col_idx, row_idx)
+                if selected:
+                    fg_color = selection_fg
+                    bg_color = selection_bg
+
+                # Handle search highlight
+                is_match, is_current = self._is_search_highlight(global_row, col_idx)
+                if is_match:
+                    bg_color = search_current_bg if is_current else search_bg
 
                 # Draw cell background
                 cell_rect = QRect(int(x), int(y), int(cw) + 1, int(ch) + 1)
-                if bg_color != default_bg or self._is_selected(col_idx, row_idx):
+                if bg_color != default_bg or selected or is_match:
                     painter.fillRect(cell_rect, bg_color)
 
                 # Draw character
@@ -481,10 +842,32 @@ class TerminalWidget(QWidget):
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._recalc_metrics()
+        # Reposition search bar at top
+        self._search_bar.setGeometry(0, 0, self.width(), 36)
+        # Reposition scrollbar at right edge
+        self._scrollbar.setGeometry(
+            self.width() - 8, 0, 8, self.height()
+        )
+        self._update_scrollbar()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         key = event.key()
         modifiers = event.modifiers()
+
+        # Cmd+F -> open search bar
+        if modifiers & Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_F:
+            self._search_bar.open_search()
+            return
+
+        # Escape -> close search if open
+        if key == Qt.Key.Key_Escape and self._search_bar.isVisible():
+            self._on_search_close()
+            return
+
+        # Cmd+A -> select all visible text
+        if modifiers & Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_A:
+            self._select_all()
+            return
 
         # Cmd+C -> copy selection (macOS)
         if (
@@ -562,7 +945,6 @@ class TerminalWidget(QWidget):
         if query == Qt.InputMethodQuery.ImCursorRectangle:
             cx = self._screen.cursor.x
             cy = self._screen.cursor.y
-            from PyQt6.QtCore import QRectF
             return QRectF(
                 cx * self._cell_width,
                 cy * self._cell_height,
@@ -574,10 +956,29 @@ class TerminalWidget(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             col, row = self._pixel_to_cell(int(event.position().x()), int(event.position().y()))
-            self._selection_start = (col, row)
-            self._selection_end = (col, row)
-            self._selecting = True
-            self.update()
+
+            # Track multi-click (double / triple)
+            if self._last_click_pos == (col, row) and self._click_timer.isActive():
+                self._click_count += 1
+            else:
+                self._click_count = 1
+            self._last_click_pos = (col, row)
+            self._click_timer.start()
+
+            if self._click_count == 3:
+                # Triple-click -> select line
+                self._select_line_at(row)
+                self._selecting = False
+            elif self._click_count == 2:
+                # Double-click -> select word
+                self._select_word_at(col, row)
+                self._selecting = False
+            else:
+                # Single click -> start drag selection
+                self._selection_start = (col, row)
+                self._selection_end = (col, row)
+                self._selecting = True
+                self.update()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -605,6 +1006,7 @@ class TerminalWidget(QWidget):
         else:
             # Scroll down
             self._scroll_offset = max(self._scroll_offset - scroll_lines, 0)
+        self._update_scrollbar()
         self.update()
         event.accept()
 

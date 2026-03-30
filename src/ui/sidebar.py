@@ -110,7 +110,8 @@ class Sidebar(QWidget):
         self.setObjectName("sidebar")
         self.setMinimumWidth(180)
         self.setMaximumWidth(400)
-        self.setFixedWidth(240)
+        # Default width is 240px, set via splitter sizes in MainWindow.
+        # Do NOT use setFixedWidth — it prevents splitter drag resize.
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
