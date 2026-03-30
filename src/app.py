@@ -12,31 +12,44 @@ from src.theme.presets.nord import PRESET as NORD_PRESET
 from src.theme.presets.tokyo_night import PRESET as TOKYO_NIGHT_PRESET
 
 
-def _setup_macos_appearance() -> None:
-    """Set macOS dark mode appearance and Korean localization BEFORE any window."""
+def _setup_macos_pre_app() -> None:
+    """Set macOS locale BEFORE QApplication — required for native dialogs."""
     import sys
     if sys.platform != "darwin":
         return
     try:
-        from AppKit import NSApp, NSAppearance, NSUserDefaults
-        # Force dark aqua appearance for the entire app
-        dark = NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua")
-        NSApp.setAppearance_(dark)
-        # Set preferred language so system dialogs show Korean
+        from Foundation import NSUserDefaults
         defaults = NSUserDefaults.standardUserDefaults()
         defaults.setObject_forKey_(["ko", "en"], "AppleLanguages")
+        defaults.synchronize()
+    except Exception:
+        pass
+
+
+def _setup_macos_post_app() -> None:
+    """Set macOS dark appearance AFTER QApplication (NSApp exists now)."""
+    import sys
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApp, NSAppearance
+        dark = NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua")
+        NSApp.setAppearance_(dark)
     except Exception:
         pass
 
 
 def create_app(argv: list[str] | None = None) -> QApplication:
     """Create and configure the QApplication instance."""
+    # macOS: set locale BEFORE QApplication
+    _setup_macos_pre_app()
+
     app = QApplication(argv or [])
     app.setApplicationName("JBTerminal")
     app.setOrganizationName("JBTerminal")
 
-    # macOS: dark mode + Korean locale (must be before any window)
-    _setup_macos_appearance()
+    # macOS: dark mode (NSApp exists after QApplication)
+    _setup_macos_post_app()
 
     # --- Theme ---
     theme_manager = ThemeManager()
