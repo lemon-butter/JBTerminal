@@ -452,11 +452,18 @@ class TerminalWidget(QWidget):
 
     def _recalc_metrics(self) -> None:
         fm = QFontMetricsF(self._font)
-        raw_width = fm.horizontalAdvance("M")
+        # Use max of several representative chars for robust cell width
+        raw_width = max(
+            fm.horizontalAdvance("M"),
+            fm.horizontalAdvance("W"),
+            fm.averageCharWidth(),
+        )
         raw_height = fm.height() * self._config.line_spacing
         # Guard against zero/negative metrics (can happen with missing fonts)
-        self._cell_width = max(raw_width, 1.0)
-        self._cell_height = max(raw_height, 1.0)
+        # ceil to avoid sub-pixel overlap between cells
+        import math
+        self._cell_width = max(math.ceil(raw_width), 1.0)
+        self._cell_height = max(math.ceil(raw_height), 1.0)
         self._baseline_offset = fm.ascent()
 
         # Recalculate grid size
@@ -756,24 +763,35 @@ class TerminalWidget(QWidget):
                 if is_match:
                     bg_color = search_current_bg if is_current else search_bg
 
+                # Determine character width (wide chars take 2 cells)
+                data = char.data if hasattr(char, 'data') else " "
+                char_width = 1
+                if data and data != " ":
+                    import unicodedata
+                    cp = ord(data[0])
+                    eaw = unicodedata.east_asian_width(data[0])
+                    # East Asian wide/fullwidth OR Private Use Area (Nerd Font icons)
+                    if eaw in ("W", "F") or (0xE000 <= cp <= 0xF8FF):
+                        char_width = 2
+
                 # Draw cell background
-                cell_rect = QRect(int(x), int(y), int(cw) + 1, int(ch) + 1)
+                cell_w = int(cw * char_width) + 1
+                cell_rect = QRect(int(x), int(y), cell_w, int(ch) + 1)
                 if bg_color != default_bg or selected or is_match:
                     painter.fillRect(cell_rect, bg_color)
 
                 # Draw character
-                data = char.data if hasattr(char, 'data') else " "
                 if data and data != " ":
-                    # Bold
-                    font = QFont(self._font)
+                    need_restore = False
                     if hasattr(char, 'bold') and char.bold:
-                        font.setBold(True)
+                        painter.font().setBold(True)
+                        need_restore = True
                     if hasattr(char, 'italics') and char.italics:
-                        font.setItalic(True)
-                    painter.setFont(font)
+                        painter.font().setItalic(True)
+                        need_restore = True
                     painter.setPen(fg_color)
-                    painter.drawText(int(x), int(y + baseline), data)
-                    if font != self._font:
+                    painter.drawText(int(x) + 1, int(y + baseline), data)
+                    if need_restore:
                         painter.setFont(self._font)
 
                 # Underline
