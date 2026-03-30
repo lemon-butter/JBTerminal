@@ -62,9 +62,16 @@ class TabButton(QWidget):
 
     def set_active(self, active: bool) -> None:
         self._active = active
-        self.setProperty("active", active)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        if active:
+            self.setStyleSheet(
+                "background-color: #0a0a1a; border-bottom: 2px solid #00FFCC;"
+            )
+            self._label.setStyleSheet("color: #00FFCC; font-weight: bold;")
+        else:
+            self.setStyleSheet(
+                "background-color: #12122a; border-bottom: 2px solid transparent;"
+            )
+            self._label.setStyleSheet("color: #8888aa;")
 
     def start_rename(self) -> None:
         """Start inline rename."""
